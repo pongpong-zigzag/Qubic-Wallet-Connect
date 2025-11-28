@@ -60,3 +60,9 @@ the official [HM25 frontend reference](https://github.com/icyblob/hm25-frontend/
 Deploy like any other Next.js App Router project (Vercel, Netlify, container).
 Ensure the site is served over HTTPS so the Web Crypto API remains available for
 seed hashing and vault checksums.
+
+**See [DEPLOYMENT.md](./DEPLOYMENT.md) for a complete deployment guide**, including:
+- WalletConnect Cloud configuration
+- Environment variable setup
+- Domain whitelisting
+- Troubleshooting common issues
