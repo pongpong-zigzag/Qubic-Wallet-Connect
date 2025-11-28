@@ -16,13 +16,18 @@ const QUBIC_EVENTS = [
   "assetAmountChanged",
 ] as const;
 
-export const QUBIC_REQUIRED_NAMESPACES: ProposalTypes.RequiredNamespaces = {
+// Use optionalNamespaces instead of requiredNamespaces (deprecated in WalletConnect v2)
+export const QUBIC_OPTIONAL_NAMESPACES: ProposalTypes.OptionalNamespaces = {
   qubic: {
     chains: ["qubic:mainnet"],
     methods: [...QUBIC_METHODS],
     events: [...QUBIC_EVENTS],
   },
 };
+
+// Keep requiredNamespaces for backward compatibility, but it will be auto-assigned to optionalNamespaces
+export const QUBIC_REQUIRED_NAMESPACES: ProposalTypes.RequiredNamespaces =
+  QUBIC_OPTIONAL_NAMESPACES as ProposalTypes.RequiredNamespaces;
 
 const getMetadata = (): SignClientTypes.Metadata => ({
   name: "Qubic Wallet Connect",
@@ -40,7 +45,7 @@ const getMetadata = (): SignClientTypes.Metadata => ({
 
 const FALLBACK_PROJECT_ID =
   process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID?.trim() ||
-  "2d3b11ae82b87043a64c8abd87f865c8";
+  "c817fdbc74c97c9862e06acf315497a9";
 
 const clientCache = new Map<string, Promise<SignClient>>();
 
@@ -58,7 +63,19 @@ export const getQubicSignClient = async (
   }
 
   if (!clientCache.has(projectId)) {
-    clientCache.set(projectId, SignClient.init({ projectId, metadata: getMetadata() }));
+    // Configure logger to suppress noisy WebSocket errors when using fallback project ID
+    const logger = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
+      ? undefined // Use default logger for custom project IDs
+      : "error"; // Only show errors for fallback project ID to reduce console noise
+
+    clientCache.set(
+      projectId,
+      SignClient.init({
+        projectId,
+        metadata: getMetadata(),
+        logger,
+      }),
+    );
   }
 
   return clientCache.get(projectId)!;

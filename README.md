@@ -28,21 +28,16 @@ actions are handled client-side; no credentials leave the browser.
 ## Environment
 
 WalletConnect-powered Qubic pairing requires a Reown/WalletConnect project ID.
-Expose it to the browser via:
+A project ID is configured as fallback: `c817fdbc74c97c9862e06acf315497a9`
 
+For production, explicitly set:
 ```
-NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=your_project_id
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=c817fdbc74c97c9862e06acf315497a9
 NEXT_PUBLIC_QUBIC_RPC_URL=https://rpc.qubic.org # optional override
 NEXT_PUBLIC_QUBIC_SNAP_VERSION=1.0.7           # optional override
 ```
 
-If the variable is missing, the Qubic card will surface a configuration warning
-and skip initializing the WalletConnect core.
-
-> **Production reminder:** the bundled fallback WalletConnect project ID is only
-> whitelisted for localhost. Every deployment must create its own project at
-> [cloud.walletconnect.com](https://cloud.walletconnect.com), whitelist the site
-> domain, and expose it via `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`.
+> **Critical for Production:** The project ID `c817fdbc74c97c9862e06acf315497a9` must have your production domain whitelisted in [WalletConnect Cloud](https://cloud.walletconnect.com). Without whitelisting, connections will fail with "origin not allowed" errors. See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed setup instructions.
 
 MetaMask integration requires **MetaMask Flask** (Snaps-enabled) plus the public
 Qubic Wallet Snap (`npm:@ardata-tech/qubic-wallet`). Override the snap identifier
@@ -60,3 +55,9 @@ the official [HM25 frontend reference](https://github.com/icyblob/hm25-frontend/
 Deploy like any other Next.js App Router project (Vercel, Netlify, container).
 Ensure the site is served over HTTPS so the Web Crypto API remains available for
 seed hashing and vault checksums.
+
+**See [DEPLOYMENT.md](./DEPLOYMENT.md) for a complete deployment guide**, including:
+- WalletConnect Cloud configuration
+- Environment variable setup
+- Domain whitelisting
+- Troubleshooting common issues
