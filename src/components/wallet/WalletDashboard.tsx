@@ -50,11 +50,18 @@ const SDK_ERRORS = {
 const getSdkError = (key: keyof typeof SDK_ERRORS) => SDK_ERRORS[key];
 const WALLETCONNECT_FALLBACK_PROJECT_ID =
   "2d3b11ae82b87043a64c8abd87f865c8";
+const EFFECTIVE_WALLETCONNECT_PROJECT_ID =
+  WALLETCONNECT_PROJECT_ID ??
+  (process.env.NODE_ENV !== "production"
+    ? WALLETCONNECT_FALLBACK_PROJECT_ID
+    : undefined);
+const DEFAULT_QUBIC_SNAP_ID = "npm:@ardata-tech/qubic-wallet";
 const QUBIC_SNAP_ID =
-  process.env.NEXT_PUBLIC_QUBIC_SNAP_ID ?? "npm:@ardata-tech/qubic-wallet";
+  process.env.NEXT_PUBLIC_QUBIC_SNAP_ID ?? DEFAULT_QUBIC_SNAP_ID;
 const QUBIC_SNAP_VERSION =
   process.env.NEXT_PUBLIC_QUBIC_SNAP_VERSION ?? "1.0.7";
 const QUBIC_WALLET_URL = "https://wallet.qubic.org/";
+const METAMASK_FLASK_URL = "https://metamask.io/";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "error";
 
@@ -686,9 +693,10 @@ export default function WalletDashboard() {
   const [vaultPassword, setVaultPassword] = useState("");
   const [vaultUpload, setVaultUpload] = useState<VaultUpload | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const walletConnectProjectId =
-    WALLETCONNECT_PROJECT_ID ?? WALLETCONNECT_FALLBACK_PROJECT_ID;
-  const walletConnectConfigured = Boolean(walletConnectProjectId);
+  const walletConnectProjectId = EFFECTIVE_WALLETCONNECT_PROJECT_ID;
+  const usingFallbackProjectId =
+    !WALLETCONNECT_PROJECT_ID &&
+    walletConnectProjectId === WALLETCONNECT_FALLBACK_PROJECT_ID;
   const [hasNativeQubic, setHasNativeQubic] = useState(false);
   const qubicVaultRef = useRef<QubicVault | null>(null);
 
@@ -709,6 +717,11 @@ export default function WalletDashboard() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     setMetamaskAvailable(Boolean(window.ethereum?.request));
+  }, []);
+
+  const openMetamaskDownload = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.open(METAMASK_FLASK_URL, "_blank", "noreferrer");
   }, []);
 
   const unlockEncryptedVault = useCallback(
@@ -1102,9 +1115,18 @@ export default function WalletDashboard() {
     } catch (error) {
       setWalletConnectUri(null);
       setQubicStatus("error");
-      setQubicMessage(
-        error instanceof Error ? error.message : "WalletConnect pairing failed.",
-      );
+      const message =
+        error instanceof Error ? error.message : "WalletConnect pairing failed.";
+      if (
+        message.toLowerCase().includes("origin not allowed") ||
+        message.includes("code: 3000")
+      ) {
+        setQubicMessage(
+          "WalletConnect rejected this origin. Add this domain to your project at https://cloud.walletconnect.com and set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID.",
+        );
+      } else {
+        setQubicMessage(message);
+      }
     }
   }, [
     fetchAccountsSnapshot,
@@ -1149,14 +1171,17 @@ export default function WalletDashboard() {
     if (hasNativeQubic) {
       return undefined;
     }
-    if (!walletConnectConfigured) {
+    if (!walletConnectProjectId) {
       return "Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID to request WalletConnect sessions.";
+    }
+    if (usingFallbackProjectId) {
+      return "The bundled WalletConnect project ID is for localhost only. Create your own at https://cloud.walletconnect.com and set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID before deploying.";
     }
     if (!qubicReady) {
       return "Preparing WalletConnect core…";
     }
     return undefined;
-  }, [hasNativeQubic, walletConnectConfigured, qubicReady]);
+  }, [hasNativeQubic, walletConnectProjectId, usingFallbackProjectId, qubicReady]);
 
   const qubicButtonLabel = qubicSession
     ? qubicSession.transport === "native"
@@ -1188,7 +1213,7 @@ export default function WalletDashboard() {
     () =>
       metamaskAvailable
         ? undefined
-        : "MetaMask Flask with Snaps support is required for this integration.",
+        : "MetaMask Flask with Snaps support is required. Install MetaMask Flask and enable Snaps beta to continue.",
     [metamaskAvailable],
   );
 
@@ -1204,26 +1229,56 @@ export default function WalletDashboard() {
     }
 
     try {
-      await provider.request({
-        method: "wallet_requestSnaps",
-        params: {
-          [QUBIC_SNAP_ID]: { version: QUBIC_SNAP_VERSION },
-        },
-      });
+      const installSnap = async (snapId: string) => {
+        await provider.request({
+          method: "wallet_requestSnaps",
+          params: {
+            [snapId]: { version: QUBIC_SNAP_VERSION },
+          },
+        });
+        return snapId;
+      };
+
+      const ensureSnapInstalled = async (): Promise<string> => {
+        try {
+          return await installSnap(QUBIC_SNAP_ID);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error ?? "");
+          const snapUnavailable =
+            message.includes("was not found in the NPM registry") ||
+            message.includes("Failed to fetch snap");
+
+          if (snapUnavailable && QUBIC_SNAP_ID !== DEFAULT_QUBIC_SNAP_ID) {
+            console.warn(
+              "[Qubic] Custom snap id failed; falling back to the official Qubic Snap.",
+              error,
+            );
+            setMetaMessage(
+              "Custom snap id unavailable; installing the official Qubic Snap instead…",
+            );
+            return installSnap(DEFAULT_QUBIC_SNAP_ID);
+          }
+
+          throw error;
+        }
+      };
+
+      const targetSnapId = await ensureSnapInstalled();
 
       const snaps = (await provider.request({
         method: "wallet_getSnaps",
       })) as Record<string, { id: string }>;
 
       const installedSnap =
-        Object.values(snaps ?? {}).find((snap) => snap.id === QUBIC_SNAP_ID) ??
+        Object.values(snaps ?? {}).find((snap) => snap.id === targetSnapId) ??
         Object.values(snaps ?? {}).find(
           (snap) =>
             snap.id?.startsWith("local:") &&
-            snap.id.endsWith(QUBIC_SNAP_ID.replace("npm:", "")),
+            snap.id.endsWith(targetSnapId.replace("npm:", "")),
         );
 
-      const resolvedSnapId = installedSnap?.id ?? QUBIC_SNAP_ID;
+      const resolvedSnapId = installedSnap?.id ?? targetSnapId;
 
       let accounts: QubicAccount[] | undefined;
       try {
@@ -1665,6 +1720,11 @@ export default function WalletDashboard() {
               <CheckCircle2 className="h-4 w-4" />
               {metaStatus === "connected" ? "Refresh Snap session" : "Connect MetaMask"}
             </ActionButton>
+            {!metamaskAvailable ? (
+              <SecondaryButton onClick={openMetamaskDownload}>
+                Install MetaMask Flask
+              </SecondaryButton>
+            ) : null}
             {metamaskWarning ? (
               <p className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-100">
                 {metamaskWarning}
