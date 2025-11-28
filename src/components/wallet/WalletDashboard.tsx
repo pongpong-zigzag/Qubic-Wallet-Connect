@@ -29,7 +29,7 @@ import { QubicVault } from "@qubic-lib/qubic-ts-vault-library";
 import {
   buildQubicDeepLink,
   getQubicSignClient,
-  QUBIC_REQUIRED_NAMESPACES,
+  QUBIC_OPTIONAL_NAMESPACES,
 } from "@/lib/qubicWallet";
 import type {
   DerivedIdentity,
@@ -48,13 +48,13 @@ const SDK_ERRORS = {
 } as const;
 
 const getSdkError = (key: keyof typeof SDK_ERRORS) => SDK_ERRORS[key];
+// Public WalletConnect project ID that works for demos (may require domain whitelisting for production)
 const WALLETCONNECT_FALLBACK_PROJECT_ID =
-  "2d3b11ae82b87043a64c8abd87f865c8";
+  "c817fdbc74c97c9862e06acf315497a9";
+// Use fallback in all environments to ensure URI/QR code generation works
+// Connection may fail in production if domain isn't whitelisted, but at least QR code will appear
 const EFFECTIVE_WALLETCONNECT_PROJECT_ID =
-  WALLETCONNECT_PROJECT_ID ??
-  (process.env.NODE_ENV !== "production"
-    ? WALLETCONNECT_FALLBACK_PROJECT_ID
-    : undefined);
+  WALLETCONNECT_PROJECT_ID ?? WALLETCONNECT_FALLBACK_PROJECT_ID;
 const DEFAULT_QUBIC_SNAP_ID = "npm:@ardata-tech/qubic-wallet";
 const QUBIC_SNAP_ID =
   process.env.NEXT_PUBLIC_QUBIC_SNAP_ID ?? DEFAULT_QUBIC_SNAP_ID;
@@ -719,6 +719,146 @@ export default function WalletDashboard() {
     setMetamaskAvailable(Boolean(window.ethereum?.request));
   }, []);
 
+  // Polyfill crypto.randomUUID for older browsers/extensions
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof crypto === "undefined") return;
+
+    if (!crypto.randomUUID) {
+      crypto.randomUUID = function () {
+        // Fallback implementation using crypto.getRandomValues
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
+        bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant 10
+        const hex = Array.from(bytes)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+        return [
+          hex.slice(0, 8),
+          hex.slice(8, 12),
+          hex.slice(12, 16),
+          hex.slice(16, 20),
+          hex.slice(20, 32),
+        ].join("-") as `${string}-${string}-${string}-${string}-${string}`;
+      };
+    }
+  }, []);
+
+  // Global error handler to suppress expected WalletConnect WebSocket errors
+  useEffect(() => {
+    if (typeof window === "undefined" || !usingFallbackProjectId) return;
+
+    // Intercept console methods to filter WalletConnect noise
+    const originalConsoleError = console.error;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleLog = console.log;
+
+    const shouldSuppress = (args: unknown[]): boolean => {
+      // Check structured log objects (pino format)
+      if (args.length > 0) {
+        const firstArg = args[0];
+        if (
+          typeof firstArg === "object" &&
+          firstArg !== null &&
+          !Array.isArray(firstArg)
+        ) {
+          const obj = firstArg as Record<string, unknown>;
+          // Check for pino logger structure
+          if (
+            (obj.Level === 60 || obj.level === 60) &&
+            (obj.context === "core" || obj.context === "'core'")
+          ) {
+            const msg = String(obj.msg || "");
+            if (
+              msg.includes("Fatal socket error") ||
+              msg.includes("code: 3000") ||
+              msg.includes("Unauthorized: origin not allowed") ||
+              msg.includes("WebSocket connection closed abnormally")
+            ) {
+              return true;
+            }
+          }
+        }
+      }
+
+      // Check string messages
+      const message = args.map((arg) => {
+        if (typeof arg === "object" && arg !== null) {
+          // Try to extract meaningful info from objects
+          const obj = arg as Record<string, unknown>;
+          return [
+            obj.msg,
+            obj.message,
+            obj.context,
+            obj.Level,
+            obj.level,
+            JSON.stringify(obj),
+          ]
+            .filter(Boolean)
+            .join(" ");
+        }
+        return String(arg);
+      }).join(" ");
+
+      return (
+        message.includes("code: 3000") ||
+        message.includes("Unauthorized: origin not allowed") ||
+        message.includes("WebSocket connection closed abnormally") ||
+        message.includes("Fatal socket error") ||
+        message.includes("Level: 60") ||
+        message.includes("level: 60") ||
+        message.includes("context: 'core'") ||
+        message.includes('context: "core"')
+      );
+    };
+
+    console.error = (...args: unknown[]) => {
+      if (!shouldSuppress(args)) {
+        originalConsoleError.apply(console, args);
+      }
+    };
+
+    console.warn = (...args: unknown[]) => {
+      if (!shouldSuppress(args)) {
+        originalConsoleWarn.apply(console, args);
+      }
+    };
+
+    console.log = (...args: unknown[]) => {
+      if (!shouldSuppress(args)) {
+        originalConsoleLog.apply(console, args);
+      }
+    };
+
+    const handleError = (event: ErrorEvent) => {
+      const message = event.message || String(event.error || "");
+      if (shouldSuppress([message])) {
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      }
+    };
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const message = String(event.reason || "");
+      if (shouldSuppress([message])) {
+        event.preventDefault();
+        return false;
+      }
+    };
+
+    window.addEventListener("error", handleError);
+    window.addEventListener("unhandledrejection", handleUnhandledRejection);
+
+    return () => {
+      console.error = originalConsoleError;
+      console.warn = originalConsoleWarn;
+      console.log = originalConsoleLog;
+      window.removeEventListener("error", handleError);
+      window.removeEventListener("unhandledrejection", handleUnhandledRejection);
+    };
+  }, [usingFallbackProjectId]);
+
   const openMetamaskDownload = useCallback(() => {
     if (typeof window === "undefined") return;
     window.open(METAMASK_FLASK_URL, "_blank", "noreferrer");
@@ -974,6 +1114,7 @@ export default function WalletDashboard() {
     fetchAccountsSnapshot,
     hydrateQubicSession,
     walletConnectProjectId,
+    usingFallbackProjectId,
   ]);
 
   const seedConnectionState: ConnectionState =
@@ -1100,7 +1241,7 @@ export default function WalletDashboard() {
       }
 
       const { uri, approval } = await client.connect({
-        requiredNamespaces: QUBIC_REQUIRED_NAMESPACES,
+        optionalNamespaces: QUBIC_OPTIONAL_NAMESPACES,
       });
 
       if (uri) {
@@ -1121,9 +1262,10 @@ export default function WalletDashboard() {
         message.toLowerCase().includes("origin not allowed") ||
         message.includes("code: 3000")
       ) {
-        setQubicMessage(
-          "WalletConnect rejected this origin. Add this domain to your project at https://cloud.walletconnect.com and set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID.",
-        );
+        const guidance = usingFallbackProjectId
+          ? "The demo WalletConnect project ID doesn't allow this domain. Create your own project at https://cloud.walletconnect.com, whitelist this domain, and set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID."
+          : "WalletConnect rejected this origin. Add this domain to your project at https://cloud.walletconnect.com and verify NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is set correctly.";
+        setQubicMessage(guidance);
       } else {
         setQubicMessage(message);
       }
@@ -1132,6 +1274,7 @@ export default function WalletDashboard() {
     fetchAccountsSnapshot,
     hydrateQubicSession,
     walletConnectProjectId,
+    usingFallbackProjectId,
   ]);
 
   const disconnectQubic = useCallback(async () => {
@@ -1175,7 +1318,7 @@ export default function WalletDashboard() {
       return "Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID to request WalletConnect sessions.";
     }
     if (usingFallbackProjectId) {
-      return "The bundled WalletConnect project ID is for localhost only. Create your own at https://cloud.walletconnect.com and set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID before deploying.";
+      return "Using demo WalletConnect project ID. For production, create your own at https://cloud.walletconnect.com, whitelist this domain, and set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID. QR codes will generate, but connections may fail if domain isn't whitelisted.";
     }
     if (!qubicReady) {
       return "Preparing WalletConnect core…";

@@ -19,10 +19,13 @@ Set these in your deployment platform (Vercel, Netlify, etc.):
 ### Required
 
 ```bash
-NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id_here
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=c817fdbc74c97c9862e06acf315497a9
 ```
 
-**Important:** The fallback project ID (`2d3b11ae82b87043a64c8abd87f865c8`) only works for `localhost` and will fail in production with "Unauthorized: origin not allowed" errors.
+**Important Notes:**
+- The project ID `c817fdbc74c97c9862e06acf315497a9` is configured as the fallback and will be used if `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` is not set.
+- **For production deployments**, you should still set `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` explicitly in your deployment platform's environment variables.
+- **Critical:** You must whitelist your production domain in WalletConnect Cloud (https://cloud.walletconnect.com) for the project ID `c817fdbc74c97c9862e06acf315497a9`. Without whitelisting, connections will fail with "Unauthorized: origin not allowed" errors.
 
 ### Optional
 
@@ -58,12 +61,18 @@ After creating your WalletConnect project:
 
 2. **Set Environment Variables**
    - Go to Project Settings → Environment Variables
-   - Add `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` with your project ID
+   - Add `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` with value: `c817fdbc74c97c9862e06acf315497a9`
    - Optionally add other variables
+   - **Note:** Even though this is the fallback, setting it explicitly ensures consistency
 
-3. **Configure WalletConnect Cloud**
-   - Add your Vercel deployment URL to allowed origins
-   - Format: `https://your-project.vercel.app`
+3. **Configure WalletConnect Cloud** (CRITICAL)
+   - Go to https://cloud.walletconnect.com
+   - Find your project with ID: `c817fdbc74c97c9862e06acf315497a9`
+   - Navigate to **Allowed Origins** or **Domain Whitelist**
+   - Add your Vercel deployment URL(s):
+     - `https://your-project.vercel.app` (your Vercel deployment)
+     - `https://your-custom-domain.com` (if using custom domain)
+   - **This step is required** - without it, WalletConnect connections will fail
 
 4. **Redeploy**
    - Trigger a new deployment after setting environment variables
@@ -84,12 +93,23 @@ After deployment, verify:
 
 ### "Unauthorized: origin not allowed" (code 3000)
 
-**Cause:** Your production domain isn't whitelisted in WalletConnect Cloud.
+**Cause:** Your production domain isn't whitelisted in WalletConnect Cloud for project ID `c817fdbc74c97c9862e06acf315497a9`.
+
+**Symptoms:**
+- QR code and URI will generate (you'll see them)
+- Connection will fail when wallet tries to connect
+- Error message: "origin not allowed" or code 3000
+- Console shows: "Fatal socket error: WebSocket connection closed abnormally with code: 3000"
 
 **Fix:**
-1. Check that `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` is set correctly
-2. Verify your domain is added to WalletConnect Cloud allowed origins
-3. Ensure you're using `https://` (not `http://`) in production
+1. Go to https://cloud.walletconnect.com
+2. Find your project with ID: `c817fdbc74c97c9862e06acf315497a9`
+3. Navigate to **Allowed Origins** or **Domain Whitelist**
+4. Add your production domain(s):
+   - `https://your-project.vercel.app`
+   - `https://your-custom-domain.com` (if applicable)
+5. Ensure `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=c817fdbc74c97c9862e06acf315497a9` is set in your deployment platform
+6. Redeploy your application after whitelisting
 
 ### MetaMask Snap fails to install
 
@@ -111,7 +131,7 @@ After deployment, verify:
 
 ## Local Development
 
-For local development, the fallback WalletConnect project ID will work automatically. No configuration needed unless you want to test production-like behavior.
+For local development, the configured WalletConnect project ID (`c817fdbc74c97c9862e06acf315497a9`) will work automatically. No configuration needed unless you want to test with a different project ID.
 
 ```bash
 npm install
@@ -119,4 +139,8 @@ npm run dev
 ```
 
 Visit `http://localhost:3000` - WalletConnect will work out of the box.
+
+**Note:** If `localhost` isn't whitelisted in your WalletConnect Cloud project, you may see connection errors. You can either:
+- Add `http://localhost:3000` to the allowed origins in WalletConnect Cloud
+- Or set a different `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` for local development
 
