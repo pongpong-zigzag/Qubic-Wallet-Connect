@@ -1,36 +1,55 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Qubic Wallet Connect
 
-## Getting Started
+Modern onboarding surface that unifies four credential sources—native Qubic
+wallets, MetaMask, private seed phrases, and encrypted vault exports—inside a
+single Next.js experience.
 
-First, run the development server:
+## Features
+
+- Qubic handshake flow with real-time status indicators.
+- MetaMask (Qubic Snap) bridge that installs the official Qubic Wallet Snap and
+  streams Qubic account telemetry straight from MetaMask Flask.
+- Private seed / raw key validator that derives real Qubic identities, exposes
+  deterministic public IDs, and queries balances from the RPC.
+- Vault importer with drag & drop, hashing, zipped JSON extraction, and account
+  hydration for `.qubic-vault` bundles.
+- Tailwind-driven UI with responsive cards, blur effects, and security copy.
+
+## Development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Visit `http://localhost:3000` to interact with the dashboard. All wallet
+actions are handled client-side; no credentials leave the browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+WalletConnect-powered Qubic pairing requires a Reown/WalletConnect project ID.
+Expose it to the browser via:
 
-## Learn More
+```
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=your_project_id
+NEXT_PUBLIC_QUBIC_RPC_URL=https://rpc.qubic.org # optional override
+NEXT_PUBLIC_QUBIC_SNAP_VERSION=1.0.7           # optional override
+```
 
-To learn more about Next.js, take a look at the following resources:
+If the variable is missing, the Qubic card will surface a configuration warning
+and skip initializing the WalletConnect core.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+MetaMask integration requires **MetaMask Flask** (Snaps-enabled) plus the public
+Qubic Wallet Snap (`npm:@ardata-tech/qubic-wallet`). Override the snap identifier
+with `NEXT_PUBLIC_QUBIC_SNAP_ID` only if you host a forked snap; otherwise the
+default bundled here will auto-install from npm. The UI will prompt to install
+or refresh the snap as needed.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+For end-to-end wallet wiring examples (WalletConnect, Snaps, seed, vault), see
+the official [HM25 frontend reference](https://github.com/icyblob/hm25-frontend/tree/main).
 
-## Deploy on Vercel
+## Production
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Deploy like any other Next.js App Router project (Vercel, Netlify, container).
+Ensure the site is served over HTTPS so the Web Crypto API remains available for
+seed hashing and vault checksums.
