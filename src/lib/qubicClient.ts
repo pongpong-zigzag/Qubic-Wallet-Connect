@@ -1,6 +1,8 @@
 import Qubic from "@ardata-tech/qubic-js";
 
-let qubicInstance: Qubic | null = null;
+type QubicClient = InstanceType<typeof Qubic>;
+
+let qubicInstance: QubicClient | null = null;
 
 const DEFAULT_RPC =
   process.env.NEXT_PUBLIC_QUBIC_RPC_URL?.trim() || "https://rpc.qubic.org";

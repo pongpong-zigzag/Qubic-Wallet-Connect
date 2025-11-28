@@ -1,5 +1,5 @@
 import SignClient from "@walletconnect/sign-client";
-import type { SignClientTypes } from "@walletconnect/types";
+import type { ProposalTypes, SignClientTypes } from "@walletconnect/types";
 
 const QUBIC_METHODS = [
   "qubic_requestAccounts",
@@ -16,14 +16,13 @@ const QUBIC_EVENTS = [
   "assetAmountChanged",
 ] as const;
 
-export const QUBIC_REQUIRED_NAMESPACES: SignClientTypes.ConnectParams["requiredNamespaces"] =
-  {
-    qubic: {
-      chains: ["qubic:mainnet"],
-      methods: [...QUBIC_METHODS],
-      events: [...QUBIC_EVENTS],
-    },
-  };
+export const QUBIC_REQUIRED_NAMESPACES: ProposalTypes.RequiredNamespaces = {
+  qubic: {
+    chains: ["qubic:mainnet"],
+    methods: [...QUBIC_METHODS],
+    events: [...QUBIC_EVENTS],
+  },
+};
 
 const getMetadata = (): SignClientTypes.Metadata => ({
   name: "Qubic Wallet Connect",
