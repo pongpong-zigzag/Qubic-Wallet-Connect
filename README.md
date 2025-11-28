@@ -39,11 +39,18 @@ NEXT_PUBLIC_QUBIC_SNAP_VERSION=1.0.7           # optional override
 If the variable is missing, the Qubic card will surface a configuration warning
 and skip initializing the WalletConnect core.
 
+> **Production reminder:** the bundled fallback WalletConnect project ID is only
+> whitelisted for localhost. Every deployment must create its own project at
+> [cloud.walletconnect.com](https://cloud.walletconnect.com), whitelist the site
+> domain, and expose it via `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`.
+
 MetaMask integration requires **MetaMask Flask** (Snaps-enabled) plus the public
 Qubic Wallet Snap (`npm:@ardata-tech/qubic-wallet`). Override the snap identifier
 with `NEXT_PUBLIC_QUBIC_SNAP_ID` only if you host a forked snap; otherwise the
-default bundled here will auto-install from npm. The UI will prompt to install
-or refresh the snap as needed.
+default bundled here will auto-install from npm. If a custom snap ID fails to
+resolve (for example, because the package is private or missing) the dashboard
+now falls back to the official snap and surfaces a warning in the UI. The app
+will prompt to install or refresh the active snap as needed.
 
 For end-to-end wallet wiring examples (WalletConnect, Snaps, seed, vault), see
 the official [HM25 frontend reference](https://github.com/icyblob/hm25-frontend/tree/main).
