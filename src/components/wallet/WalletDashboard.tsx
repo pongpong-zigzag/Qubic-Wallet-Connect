@@ -24,7 +24,6 @@ import {
 } from "react";
 import type SignClient from "@walletconnect/sign-client";
 import type { SessionTypes, SignClientTypes } from "@walletconnect/types";
-import { getSdkError } from "@walletconnect/utils";
 import { QubicVault } from "@qubic-lib/qubic-ts-vault-library";
 
 import {
@@ -44,6 +43,11 @@ import {
 
 const WALLETCONNECT_PROJECT_ID =
   process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID?.trim() || undefined;
+const SDK_ERRORS = {
+  USER_DISCONNECTED: { code: 6000, message: "User disconnected" },
+} as const;
+
+const getSdkError = (key: keyof typeof SDK_ERRORS) => SDK_ERRORS[key];
 const WALLETCONNECT_FALLBACK_PROJECT_ID =
   "2d3b11ae82b87043a64c8abd87f865c8";
 const QUBIC_SNAP_ID =
