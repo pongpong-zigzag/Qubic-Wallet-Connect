@@ -125,6 +125,12 @@ type VaultAccount = {
   balance?: string;
 };
 
+type NativeQubicAccount = {
+  address?: string;
+  name?: string;
+  amount?: number;
+};
+
 type SeedClassification =
   | { valid: true; descriptor: string }
   | { valid: false };
@@ -318,7 +324,10 @@ const normalizeSeedInput = (value: string) => value.trim().toLowerCase();
 const normalizePrivateKeyInput = (value: string) =>
   value.trim().replace(/^0x/i, "");
 
-const buildWatchOnlyAccount = async (publicId: string, name?: string) => {
+const buildWatchOnlyAccount = async (
+  publicId: string,
+  name?: string,
+): Promise<VaultAccount> => {
   const snapshot = await fetchIdentitySnapshot(publicId);
   return {
     name: name ?? "Watch-only account",
@@ -719,7 +728,7 @@ export default function WalletDashboard() {
       }
 
       const accounts = await Promise.all(
-        seeds.map(async (seed) => {
+        seeds.map(async (seed): Promise<VaultAccount | null> => {
           try {
             const revealedSeed = await vault.revealSeed(seed.publicId);
             const details = await deriveIdentityFromSeed(revealedSeed);
@@ -729,7 +738,7 @@ export default function WalletDashboard() {
               source: "seed",
               publicId: details.publicId,
               balance: snapshot.balance?.balance,
-            };
+            } satisfies VaultAccount;
           } catch (error) {
             console.warn("Failed to derive seed from vault", seed.publicId, error);
             return null;
@@ -1002,16 +1011,19 @@ export default function WalletDashboard() {
           method: "qubic_requestAccounts",
         });
 
-        const account = Array.isArray(response)
-          ? (response[0] as { address?: string; name?: string; amount?: number } | string | undefined)
-          : response;
+        const accountCandidate = Array.isArray(response)
+          ? (response[0] as NativeQubicAccount | string | undefined)
+          : (response as NativeQubicAccount | string | undefined);
+
+        const structuredAccount =
+          typeof accountCandidate === "object" && accountCandidate
+            ? accountCandidate
+            : undefined;
 
         const address =
-          typeof account === "string"
-            ? account
-            : typeof account === "object" && account
-              ? (account.address as string | undefined)
-              : undefined;
+          typeof accountCandidate === "string"
+            ? accountCandidate
+            : structuredAccount?.address;
 
         if (!address) {
           throw new Error("Unable to read account from native Qubic Wallet.");
@@ -1024,16 +1036,18 @@ export default function WalletDashboard() {
           chainId: "qubic:mainnet",
           walletName: "Qubic Wallet",
           walletUrl: QUBIC_WALLET_URL,
-          accounts:
-            typeof account === "object" && account
-              ? [
-                  {
-                    address,
-                    name: account.name ?? "Primary",
-                    amount: typeof account.amount === "number" ? account.amount : undefined,
-                  },
-                ]
-              : undefined,
+          accounts: structuredAccount
+            ? [
+                {
+                  address,
+                  name: structuredAccount.name ?? "Primary",
+                  amount:
+                    typeof structuredAccount.amount === "number"
+                      ? structuredAccount.amount
+                      : undefined,
+                },
+              ]
+            : undefined,
         });
         setQubicStatus("connected");
         setQubicMessage(`Linked ${shorten(address)} via native provider.`);
