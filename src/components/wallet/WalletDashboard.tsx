@@ -9,494 +9,55 @@ import {
   UploadCloud,
   Wallet2,
 } from "lucide-react";
-import JSZip from "jszip";
 import { QRCodeSVG } from "qrcode.react";
-import {
-  type ChangeEvent,
-  type DragEvent,
-  type FormEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import type SignClient from "@walletconnect/sign-client";
-import type { SessionTypes, SignClientTypes } from "@walletconnect/types";
-import { QubicVault } from "@qubic-lib/qubic-ts-vault-library";
+import { type DragEvent, type ReactNode } from "react";
 
 import {
-  buildQubicDeepLink,
-  getQubicSignClient,
-  QUBIC_OPTIONAL_NAMESPACES,
-} from "@/lib/qubicWallet";
-import type {
-  DerivedIdentity,
-  IdentitySnapshot,
-} from "@/lib/qubicIdentity";
-import {
-  deriveIdentityFromPrivateKey,
-  deriveIdentityFromSeed,
-  fetchIdentitySnapshot,
-} from "@/lib/qubicIdentity";
+  QUBIC_WALLET_URL,
+  shorten,
+  useWalletDashboard,
+  type ConnectionState,
+  type StatusDescriptor,
+} from "./hooks/useWalletDashboard";
 
-const WALLETCONNECT_PROJECT_ID =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID?.trim() || undefined;
-const SDK_ERRORS = {
-  USER_DISCONNECTED: { code: 6000, message: "User disconnected" },
-} as const;
+type DashboardSnapshot = ReturnType<typeof useWalletDashboard>;
+type CalloutTone = "info" | "warning" | "danger" | "success";
 
-const getSdkError = (key: keyof typeof SDK_ERRORS) => SDK_ERRORS[key];
-// Public WalletConnect project ID that works for demos (may require domain whitelisting for production)
-const WALLETCONNECT_FALLBACK_PROJECT_ID =
-  "c817fdbc74c97c9862e06acf315497a9";
-// Use fallback in all environments to ensure URI/QR code generation works
-// Connection may fail in production if domain isn't whitelisted, but at least QR code will appear
-const EFFECTIVE_WALLETCONNECT_PROJECT_ID =
-  WALLETCONNECT_PROJECT_ID ?? WALLETCONNECT_FALLBACK_PROJECT_ID;
-const DEFAULT_QUBIC_SNAP_ID = "npm:@ardata-tech/qubic-wallet";
-const QUBIC_SNAP_ID =
-  process.env.NEXT_PUBLIC_QUBIC_SNAP_ID ?? DEFAULT_QUBIC_SNAP_ID;
-const QUBIC_SNAP_VERSION =
-  process.env.NEXT_PUBLIC_QUBIC_SNAP_VERSION ?? "1.0.7";
-const QUBIC_WALLET_URL = "https://wallet.qubic.org/";
-const METAMASK_FLASK_URL = "https://metamask.io/";
-
-type ConnectionState = "idle" | "connecting" | "connected" | "error";
-
-type SeedState =
-  | { state: "idle"; message?: string }
-  | { state: "invalid"; message: string }
-  | {
-      state: "processing";
-      message: string;
-    }
-  | {
-      state: "ready";
-      message: string;
-      fingerprint: string;
-      descriptor: string;
-      identity?: SeedIdentityDetails;
-    };
-
-type VaultState =
-  | { state: "idle"; message?: string }
-  | { state: "processing"; message: string }
-  | {
-      state: "ready";
-      message: string;
-      fileName: string;
-      size: number;
-      checksum: string;
-      summary?: VaultSummary;
-      accounts?: VaultAccount[];
-    }
-  | { state: "error"; message: string };
-
-type VaultSummary = {
-  accounts?: number;
-  lastUpdated?: string;
-};
-
-type VaultFileAccount = {
-  name?: string;
-  alias?: string;
-  seed?: string;
-  privateKey?: string;
-  publicKey?: string;
-  publicId?: string;
-  password?: string;
-};
-
-type VaultUpload = {
-  file: File;
-  buffer: ArrayBuffer;
-  name: string;
-  size: number;
-  checksum: string;
-};
-
-type SeedIdentityDetails = {
-  publicId: string;
-  publicKeyHex: string;
-  privateKeyHex: string;
-  balance?: string;
-  ownedAssetCount?: number;
-};
-
-type VaultAccount = {
-  name?: string;
-  source: "seed" | "privateKey" | "publicKey" | "unknown";
-  publicId: string;
-  balance?: string;
-};
-
-type NativeQubicAccount = {
-  address?: string;
-  name?: string;
-  amount?: number;
-};
-
-type SeedClassification =
-  | { valid: true; descriptor: string }
-  | { valid: false };
-
-type QubicAsset = {
-  assetName: string;
-  issuerIdentity: string;
-  ownedAmount: number;
-};
-
-type QubicAccount = {
-  address: string;
-  name?: string;
-  amount?: number;
-  assets?: QubicAsset[];
-};
-
-type QubicSession = {
-  topic: string;
-  address: string;
-  chainId: string;
-  expiry?: number;
-  walletName?: string;
-  walletUrl?: string;
-  accounts?: QubicAccount[];
-  transport: "native" | "walletconnect";
-};
-
-type StatusDescriptor = {
-  label: string;
-  state: ConnectionState;
-  description?: string;
-};
-
-const STATUS_COLORS: Record<ConnectionState, string> = {
-  idle: "bg-slate-600/60 text-slate-200",
-  connecting: "bg-amber-500/20 text-amber-200",
-  connected: "bg-emerald-500/20 text-emerald-200",
-  error: "bg-rose-500/20 text-rose-200",
-};
-
-const STATUS_DOT: Record<ConnectionState, string> = {
-  idle: "bg-slate-400",
-  connecting: "bg-amber-400 animate-pulse",
-  connected: "bg-emerald-400",
-  error: "bg-rose-400",
+const STATUS_BADGE_STYLES: Record<
+  ConnectionState,
+  { badge: string; dot: string }
+> = {
+  idle: {
+    badge: "border-slate-200 bg-slate-50 text-slate-600",
+    dot: "bg-slate-400",
+  },
+  connecting: {
+    badge: "border-amber-200 bg-amber-50 text-amber-700",
+    dot: "bg-amber-400 animate-pulse",
+  },
+  connected: {
+    badge: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    dot: "bg-emerald-500",
+  },
+  error: {
+    badge: "border-rose-200 bg-rose-50 text-rose-700",
+    dot: "bg-rose-500",
+  },
 };
 
 const formatBytes = (size: number) => {
-  if (size === 0) return "0 B";
+  if (!size) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
   const index = Math.floor(Math.log(size) / Math.log(1024));
   return `${(size / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 };
-
-const digestHex = async (data: string | ArrayBuffer): Promise<string> => {
-  if (typeof window === "undefined" || !window.crypto?.subtle) {
-    throw new Error("Secure context required to hash payload.");
-  }
-
-  const source =
-    typeof data === "string"
-      ? new TextEncoder().encode(data)
-      : new Uint8Array(data);
-
-  const buffer = await window.crypto.subtle.digest("SHA-256", source);
-  return Array.from(new Uint8Array(buffer))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-};
-
-const shorten = (value?: string | null, size = 4) => {
-  if (!value) return "";
-  return value.length <= size * 2 + 2
-    ? value
-    : `${value.slice(0, size)}…${value.slice(-size)}`;
-};
-
-const parseVaultSummary = (raw: string): VaultSummary | undefined => {
-  try {
-    const parsed = JSON.parse(raw) as {
-      accounts?: unknown;
-      updatedAt?: string;
-      lastUpdated?: string;
-    };
-
-    const accounts = Array.isArray(parsed.accounts)
-      ? parsed.accounts.length
-      : undefined;
-
-    return {
-      accounts,
-      lastUpdated: parsed.updatedAt ?? parsed.lastUpdated,
-    };
-  } catch {
-    return undefined;
-  }
-};
-
-const classifySeed = (seed: string): SeedClassification => {
-  const normalized = seed.trim();
-  const words = normalized.split(/\s+/).filter(Boolean);
-  const isMnemonic = words.length >= 12 && words.length <= 24;
-  const compact = normalized.replace(/\s+/g, "");
-  const isHex = /^[0-9a-fA-F]{64}$/u.test(compact);
-
-  if (isMnemonic) {
-    return {
-      valid: true,
-      descriptor: `${words.length}-word mnemonic`,
-    };
-  }
-
-  if (isHex) {
-    return {
-      valid: true,
-      descriptor: "64-character private key",
-    };
-  }
-
-  return { valid: false };
-};
-
-const QUBIC_SEED_REGEX = /^[a-z]{55,}$/u;
-const HEX_PRIVATE_KEY_REGEX = /^[0-9a-fA-F]{64}$/u;
-const QUBIC_IDENTITY_REGEX = /^[A-Z]{60}$/u;
-
-const isQubicSeed = (value: string) => QUBIC_SEED_REGEX.test(value);
-const isHexPrivateKey = (value: string) =>
-  HEX_PRIVATE_KEY_REGEX.test(value.replace(/^0x/, ""));
-const isQubicIdentity = (value: string) =>
-  QUBIC_IDENTITY_REGEX.test(value);
-
-const buildSeedIdentityDetails = (
-  details: DerivedIdentity,
-  snapshot?: IdentitySnapshot,
-): SeedIdentityDetails => ({
-  publicId: details.publicId,
-  publicKeyHex: details.publicKeyHex,
-  privateKeyHex: details.privateKeyHex,
-  balance: snapshot?.balance?.balance,
-  ownedAssetCount: Array.isArray(snapshot?.ownedAssets)
-    ? snapshot?.ownedAssets.length
-    : undefined,
-});
-
-const isZipArchive = (buffer: ArrayBuffer) => {
-  if (buffer.byteLength < 4) return false;
-  const signature = new Uint8Array(buffer.slice(0, 4));
-  return signature[0] === 0x50 && signature[1] === 0x4b;
-};
-
-const extractVaultText = async (buffer: ArrayBuffer) => {
-  if (!isZipArchive(buffer)) {
-    return new TextDecoder().decode(buffer);
-  }
-
-  const zip = await JSZip.loadAsync(buffer);
-  const files = Object.values(zip.files);
-  const jsonFile =
-    files.find((file) => !file.dir && file.name.endsWith(".json")) ??
-    files.find((file) => !file.dir);
-
-  if (!jsonFile) {
-    throw new Error("Vault archive does not contain any readable entries.");
-  }
-
-  return jsonFile.async("string");
-};
-
-const safeJsonParse = (text: string) => {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return null;
-  }
-};
-
-const looksEncryptedVault = (value: unknown) =>
-  Boolean(
-    value &&
-      typeof value === "object" &&
-      "cipher" in value &&
-      "iv" in value &&
-      "salt" in value,
-  );
-
-const isEncryptedVaultText = (text: string) => looksEncryptedVault(safeJsonParse(text));
-
-const normalizeSeedInput = (value: string) => value.trim().toLowerCase();
-const normalizePrivateKeyInput = (value: string) =>
-  value.trim().replace(/^0x/i, "");
-
-const buildWatchOnlyAccount = async (
-  publicId: string,
-  name?: string,
-): Promise<VaultAccount> => {
-  const snapshot = await fetchIdentitySnapshot(publicId);
-  return {
-    name: name ?? "Watch-only account",
-    source: "publicKey",
-    publicId,
-    balance: snapshot.balance?.balance,
-  };
-};
-
-const deriveVaultAccount = async (
-  entry: VaultFileAccount,
-): Promise<VaultAccount | null> => {
-  const label = entry.name ?? entry.alias;
-
-  if (entry.seed) {
-    const normalizedSeed = normalizeSeedInput(entry.seed);
-    if (isQubicSeed(normalizedSeed)) {
-      const details = await deriveIdentityFromSeed(normalizedSeed);
-      const snapshot = await fetchIdentitySnapshot(details.publicId);
-      return {
-        name: label,
-        source: "seed",
-        publicId: details.publicId,
-        balance: snapshot.balance?.balance,
-      };
-    }
-  }
-
-  if (entry.privateKey) {
-    const normalizedKey = normalizePrivateKeyInput(entry.privateKey);
-    if (isHexPrivateKey(normalizedKey)) {
-      const details = await deriveIdentityFromPrivateKey(normalizedKey);
-      const snapshot = await fetchIdentitySnapshot(details.publicId);
-      return {
-        name: label,
-        source: "privateKey",
-        publicId: details.publicId,
-        balance: snapshot.balance?.balance,
-      };
-    }
-  }
-
-  const identityCandidate = entry.publicId ?? entry.publicKey;
-  if (identityCandidate && isQubicIdentity(identityCandidate)) {
-    return buildWatchOnlyAccount(identityCandidate, label);
-  }
-
-  return null;
-};
-
-const collectVaultEntries = (value: unknown): VaultFileAccount[] => {
-  const results: VaultFileAccount[] = [];
-  const consume = (candidate: unknown) => {
-    if (Array.isArray(candidate)) {
-      candidate.forEach((item) => {
-        if (item && typeof item === "object") {
-          results.push(item as VaultFileAccount);
-        }
-      });
-    }
-  };
-
-  if (Array.isArray(value)) {
-    consume(value);
-  } else if (value && typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    ["accounts", "wallets", "seeds", "entries", "data"].forEach((key) => {
-      if (Array.isArray(obj[key])) {
-        consume(obj[key]);
-      }
-    });
-    if (!results.length) {
-      Object.values(obj).forEach((val) => {
-        if (Array.isArray(val)) {
-          consume(val);
-        }
-      });
-    }
-  }
-  return results;
-};
-
-const deriveVaultAccounts = async (entries: VaultFileAccount[]) => {
-  const derived = await Promise.all(
-    entries.map(async (entry) => {
-      try {
-        return await deriveVaultAccount(entry);
-      } catch (error) {
-        console.warn("Failed to derive vault entry", entry.name ?? entry.alias, error);
-        return null;
-      }
-    }),
-  );
-
-  const accounts = derived.filter(
-    (account): account is VaultAccount => Boolean(account),
-  );
-
-  if (!accounts.length) {
-    throw new Error(
-      "No compatible seeds, private keys, or identities were found in this vault file.",
-    );
-  }
-
-  return accounts;
-};
-
-const parsePlainVaultFile = async (text: string) => {
-  const parsed = safeJsonParse(text);
-  if (!parsed) {
-    throw new Error("Vault file is not valid JSON.");
-  }
-  const entries = collectVaultEntries(parsed);
-  if (!entries.length) {
-    throw new Error("This vault file does not contain any account entries.");
-  }
-  return deriveVaultAccounts(entries);
-};
-
-const textToArrayBuffer = (text: string) =>
-  new TextEncoder().encode(text).buffer;
-
-const parseQubicAccountString = (value?: string) => {
-  if (!value) return null;
-  const [namespace, chainId, address] = value.split(":");
-  if (!namespace || !chainId || !address) return null;
-  return { namespace, chainId, address };
-};
-
-const formatExpiryRelative = (timestamp?: number) => {
-  if (!timestamp) return "—";
-  const diff = timestamp - Date.now();
-  if (diff <= 0) return "expired";
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 60) return `in ${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `in ${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `in ${days}d`;
-};
-
-const formatAbsoluteDate = (timestamp?: number) => {
-  if (!timestamp) return "—";
-  return new Date(timestamp).toLocaleString();
-};
-
-const buildStatusDescriptor = (
-  label: string,
-  state: ConnectionState,
-  description?: string,
-): StatusDescriptor => ({
-  label,
-  state,
-  description,
-});
 
 const renderStateCopy = (state: ConnectionState) => {
   switch (state) {
     case "connected":
       return "Ready";
     case "connecting":
-      return "Authorizing…";
+      return "Authorizing";
     case "error":
       return "Action needed";
     default:
@@ -504,101 +65,110 @@ const renderStateCopy = (state: ConnectionState) => {
   }
 };
 
-type WalletCardProps = {
+type CardProps = {
   title: string;
-  icon: ReactNode;
   description: string;
+  icon: ReactNode;
   status: ConnectionState;
-  statusMessage?: string;
+  message?: string;
   children: ReactNode;
 };
 
 const Card = ({
   title,
-  icon,
   description,
+  icon,
   status,
-  statusMessage,
+  message,
   children,
-}: WalletCardProps) => (
-  <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-slate-950/40 backdrop-blur">
-    <div className="mb-6 flex items-start justify-between gap-4">
+}: CardProps) => (
+  <section className="space-y-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-200/70">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
       <div>
-        <div className="flex items-center gap-3 text-xl font-semibold text-white">
-          <span className="rounded-2xl bg-white/10 p-3 text-sky-300">
+        <div className="flex items-center gap-3 text-lg font-semibold text-slate-900">
+          <span className="rounded-2xl bg-slate-100 p-3 text-slate-600">
             {icon}
           </span>
           {title}
         </div>
-        <p className="mt-3 text-sm text-slate-300">{description}</p>
+        <p className="mt-2 text-sm text-slate-500">{description}</p>
       </div>
-      <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1 text-xs font-medium uppercase tracking-wide text-slate-200">
+      <span
+        className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${STATUS_BADGE_STYLES[status].badge}`}
+      >
         <span
-          className={`h-2 w-2 rounded-full ${
-            STATUS_DOT[(status as ConnectionState) ?? "idle"]
-          }`}
+          className={`h-2 w-2 rounded-full ${STATUS_BADGE_STYLES[status].dot}`}
         />
-        {renderStateCopy(status as ConnectionState)}
+        {renderStateCopy(status)}
       </span>
     </div>
-
-    {statusMessage && (
-      <p className="mb-4 text-sm text-slate-200">{statusMessage}</p>
-    )}
-
+    {message ? <p className="text-sm text-slate-500">{message}</p> : null}
     {children}
   </section>
 );
 
-const StatusBadge = ({ label, state, description }: StatusDescriptor) => (
+const StatusBadge = ({ descriptor }: { descriptor: StatusDescriptor }) => (
   <div
-    className={`flex items-center justify-between rounded-2xl px-4 py-3 text-xs font-medium ${STATUS_COLORS[state]}`}
+    className={`flex items-center justify-between rounded-2xl border px-4 py-3 text-xs font-medium ${STATUS_BADGE_STYLES[descriptor.state].badge}`}
   >
     <div className="flex items-center gap-3">
-      <span className={`h-2.5 w-2.5 rounded-full ${STATUS_DOT[state]}`} />
-      <span className="tracking-wide">{label}</span>
+      <span
+        className={`h-2.5 w-2.5 rounded-full ${STATUS_BADGE_STYLES[descriptor.state].dot}`}
+      />
+      <span className="uppercase tracking-wide">{descriptor.label}</span>
     </div>
-    {description && (
-      <span className="text-[11px] font-normal text-white/70">
-        {description}
+    {descriptor.description ? (
+      <span className="text-[11px] text-slate-500">
+        {descriptor.description}
       </span>
-    )}
+    ) : null}
   </div>
 );
+
+type ActionButtonProps = {
+  children: ReactNode;
+  onClick?: () => void;
+  type?: "button" | "submit";
+  disabled?: boolean;
+  loading?: boolean;
+};
 
 const ActionButton = ({
   children,
   onClick,
+  type = "button",
   disabled,
-}: {
+  loading,
+}: ActionButtonProps) => {
+  const isDisabled = disabled || loading;
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={isDisabled}
+      className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+    >
+      {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+      {children}
+    </button>
+  );
+};
+
+type SecondaryButtonProps = {
   children: ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    disabled={disabled}
-    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-linear-to-r from-sky-400 via-cyan-400 to-emerald-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-  >
-    {disabled ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-    {children}
-  </button>
-);
+  onClick?: () => void;
+  type?: "button" | "submit";
+};
 
 const SecondaryButton = ({
   children,
-  type = "button",
   onClick,
-}: {
-  children: ReactNode;
-  type?: "button" | "submit";
-  onClick?: () => void;
-}) => (
+  type = "button",
+}: SecondaryButtonProps) => (
   <button
     type={type}
     onClick={onClick}
-    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-white/15 px-4 py-3 text-sm font-semibold text-white/90 transition hover:border-white/40 hover:text-white"
+    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
   >
     {children}
   </button>
@@ -611,8 +181,8 @@ const InputLabel = ({
   label: string;
   children: ReactNode;
 }) => (
-  <label className="flex flex-col gap-2 text-sm text-slate-200">
-    <span className="font-medium tracking-wide text-white/80">{label}</span>
+  <label className="flex flex-col gap-2 text-sm text-slate-600">
+    <span className="font-semibold text-slate-700">{label}</span>
     {children}
   </label>
 );
@@ -634,13 +204,11 @@ const TextArea = ({
       onChange={(event) => onChange(event.target.value)}
       rows={4}
       spellCheck={false}
-      className={`w-full rounded-2xl border border-white/10 bg-slate-900/40 p-3 text-sm outline-none transition focus:border-cyan-400/60 ${
-        masked && value ? "text-transparent caret-white selection:bg-white/20" : "text-white"
-      }`}
+      className={`w-full rounded-2xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-slate-700 outline-none transition focus:border-slate-400 ${masked ? "caret-slate-400" : ""}`}
       placeholder={placeholder}
     />
     {masked && value ? (
-      <div className="pointer-events-none absolute inset-0 whitespace-pre-wrap wrap-break-word rounded-2xl border border-transparent bg-transparent p-3 text-sm text-white/90">
+      <div className="pointer-events-none absolute inset-0 whitespace-pre-wrap rounded-2xl p-3 font-mono text-sm text-slate-700/80">
         {value.replace(/[^\s]/g, "•")}
       </div>
     ) : null}
@@ -648,1502 +216,610 @@ const TextArea = ({
 );
 
 const FileDropZone = ({
-  onDrop,
   onClick,
+  onDrop,
   children,
 }: {
-  onDrop: (event: DragEvent<HTMLDivElement>) => void;
   onClick: () => void;
+  onDrop: (event: DragEvent<HTMLDivElement>) => void;
   children: ReactNode;
 }) => (
   <div
+    onClick={onClick}
     onDragOver={(event) => {
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
     }}
     onDrop={onDrop}
-    onClick={onClick}
-    className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-cyan-400/40 bg-slate-900/50 py-10 text-center text-slate-200 transition hover:border-cyan-300 hover:bg-slate-900/70"
+    className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 px-6 py-12 text-center text-slate-600 transition hover:bg-slate-50"
   >
     {children}
   </div>
 );
 
-export default function WalletDashboard() {
-  const [qubicStatus, setQubicStatus] = useState<ConnectionState>("idle");
-  const [qubicMessage, setQubicMessage] = useState<string>();
-  const [qubicSession, setQubicSession] = useState<QubicSession | null>(null);
-  const [walletConnectUri, setWalletConnectUri] = useState<string | null>(null);
-  const [qubicReady, setQubicReady] = useState(false);
-  const signClientRef = useRef<SignClient | null>(null);
-  const qubicSessionRef = useRef<QubicSession | null>(null);
-
-  const [metaStatus, setMetaStatus] = useState<ConnectionState>("idle");
-  const [metaMessage, setMetaMessage] = useState<string>();
-  const [snapAccounts, setSnapAccounts] = useState<QubicAccount[]>([]);
-  const [metamaskAvailable, setMetamaskAvailable] = useState(false);
-
-  const [seedInput, setSeedInput] = useState("");
-  const [seedState, setSeedState] = useState<SeedState>({ state: "idle" });
-  const [seedVisible, setSeedVisible] = useState(false);
-
-  const [vaultState, setVaultState] = useState<VaultState>({
-    state: "idle",
-  });
-  const [vaultPassword, setVaultPassword] = useState("");
-  const [vaultUpload, setVaultUpload] = useState<VaultUpload | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const walletConnectProjectId = EFFECTIVE_WALLETCONNECT_PROJECT_ID;
-  const usingFallbackProjectId =
-    !WALLETCONNECT_PROJECT_ID &&
-    walletConnectProjectId === WALLETCONNECT_FALLBACK_PROJECT_ID;
-  const [hasNativeQubic, setHasNativeQubic] = useState(false);
-  const qubicVaultRef = useRef<QubicVault | null>(null);
-
-  useEffect(() => {
-    qubicSessionRef.current = qubicSession;
-  }, [qubicSession]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const detect = () => {
-      setHasNativeQubic(Boolean(window.qubic));
-    };
-    detect();
-    const interval = window.setInterval(detect, 3000);
-    return () => window.clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    setMetamaskAvailable(Boolean(window.ethereum?.request));
-  }, []);
-
-  // Polyfill crypto.randomUUID for older browsers/extensions
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof crypto === "undefined") return;
-
-    if (!crypto.randomUUID) {
-      crypto.randomUUID = function () {
-        // Fallback implementation using crypto.getRandomValues
-        const bytes = new Uint8Array(16);
-        crypto.getRandomValues(bytes);
-        bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
-        bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant 10
-        const hex = Array.from(bytes)
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("");
-        return [
-          hex.slice(0, 8),
-          hex.slice(8, 12),
-          hex.slice(12, 16),
-          hex.slice(16, 20),
-          hex.slice(20, 32),
-        ].join("-") as `${string}-${string}-${string}-${string}-${string}`;
-      };
-    }
-  }, []);
-
-  // Global error handler to suppress expected WalletConnect WebSocket errors
-  useEffect(() => {
-    if (typeof window === "undefined" || !usingFallbackProjectId) return;
-
-    // Intercept console methods to filter WalletConnect noise
-    const originalConsoleError = console.error;
-    const originalConsoleWarn = console.warn;
-    const originalConsoleLog = console.log;
-
-    const shouldSuppress = (args: unknown[]): boolean => {
-      // Check structured log objects (pino format)
-      if (args.length > 0) {
-        const firstArg = args[0];
-        if (
-          typeof firstArg === "object" &&
-          firstArg !== null &&
-          !Array.isArray(firstArg)
-        ) {
-          const obj = firstArg as Record<string, unknown>;
-          // Check for pino logger structure
-          if (
-            (obj.Level === 60 || obj.level === 60) &&
-            (obj.context === "core" || obj.context === "'core'")
-          ) {
-            const msg = String(obj.msg || "");
-            if (
-              msg.includes("Fatal socket error") ||
-              msg.includes("code: 3000") ||
-              msg.includes("Unauthorized: origin not allowed") ||
-              msg.includes("WebSocket connection closed abnormally")
-            ) {
-              return true;
-            }
-          }
-        }
-      }
-
-      // Check string messages
-      const message = args.map((arg) => {
-        if (typeof arg === "object" && arg !== null) {
-          // Try to extract meaningful info from objects
-          const obj = arg as Record<string, unknown>;
-          return [
-            obj.msg,
-            obj.message,
-            obj.context,
-            obj.Level,
-            obj.level,
-            JSON.stringify(obj),
-          ]
-            .filter(Boolean)
-            .join(" ");
-        }
-        return String(arg);
-      }).join(" ");
-
-      return (
-        message.includes("code: 3000") ||
-        message.includes("Unauthorized: origin not allowed") ||
-        message.includes("WebSocket connection closed abnormally") ||
-        message.includes("Fatal socket error") ||
-        message.includes("Level: 60") ||
-        message.includes("level: 60") ||
-        message.includes("context: 'core'") ||
-        message.includes('context: "core"')
-      );
-    };
-
-    console.error = (...args: unknown[]) => {
-      if (!shouldSuppress(args)) {
-        originalConsoleError.apply(console, args);
-      }
-    };
-
-    console.warn = (...args: unknown[]) => {
-      if (!shouldSuppress(args)) {
-        originalConsoleWarn.apply(console, args);
-      }
-    };
-
-    console.log = (...args: unknown[]) => {
-      if (!shouldSuppress(args)) {
-        originalConsoleLog.apply(console, args);
-      }
-    };
-
-    const handleError = (event: ErrorEvent) => {
-      const message = event.message || String(event.error || "");
-      if (shouldSuppress([message])) {
-        event.preventDefault();
-        event.stopPropagation();
-        return false;
-      }
-    };
-
-    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-      const message = String(event.reason || "");
-      if (shouldSuppress([message])) {
-        event.preventDefault();
-        return false;
-      }
-    };
-
-    window.addEventListener("error", handleError);
-    window.addEventListener("unhandledrejection", handleUnhandledRejection);
-
-    return () => {
-      console.error = originalConsoleError;
-      console.warn = originalConsoleWarn;
-      console.log = originalConsoleLog;
-      window.removeEventListener("error", handleError);
-      window.removeEventListener("unhandledrejection", handleUnhandledRejection);
-    };
-  }, [usingFallbackProjectId]);
-
-  const openMetamaskDownload = useCallback(() => {
-    if (typeof window === "undefined") return;
-    window.open(METAMASK_FLASK_URL, "_blank", "noreferrer");
-  }, []);
-
-  const unlockEncryptedVault = useCallback(
-    async (upload: VaultUpload, password: string) => {
-      if (!password.trim()) {
-        throw new Error("Enter the password used to create this vault.");
-      }
-
-      const vault =
-        qubicVaultRef.current ?? new QubicVault();
-      qubicVaultRef.current = vault;
-
-      await vault.importAndUnlock(true, password, null, upload.file);
-      const seeds = vault.getSeeds().filter((seed) => !seed.isOnlyWatch);
-      if (!seeds.length) {
-        throw new Error("Vault unlocked but contains no spendable seeds.");
-      }
-
-      const accounts = await Promise.all(
-        seeds.map(async (seed): Promise<VaultAccount | null> => {
-          try {
-            const revealedSeed = await vault.revealSeed(seed.publicId);
-            const details = await deriveIdentityFromSeed(revealedSeed);
-            const snapshot = await fetchIdentitySnapshot(details.publicId);
-            return {
-              name: seed.alias ?? seed.publicId,
-              source: "seed",
-              publicId: details.publicId,
-              balance: snapshot.balance?.balance,
-            } satisfies VaultAccount;
-          } catch (error) {
-            console.warn("Failed to derive seed from vault", seed.publicId, error);
-            return null;
-          }
-        }),
-      );
-
-      const usable = accounts.filter(
-        (account): account is VaultAccount => Boolean(account),
-      );
-
-      if (!usable.length) {
-        throw new Error("Unable to derive any accounts from this vault.");
-      }
-
-      return usable;
+const Callout = ({
+  tone = "info",
+  children,
+}: {
+  tone?: CalloutTone;
+  children: ReactNode;
+}) => {
+  const palette: Record<CalloutTone, { bg: string; border: string; text: string }> = {
+    info: {
+      bg: "bg-sky-50",
+      border: "border-sky-100",
+      text: "text-sky-700",
     },
-    [],
-  );
-
-  const handleVaultUnlock = useCallback(async () => {
-    if (!vaultUpload) {
-      setVaultState({
-        state: "error",
-        message: "Upload an encrypted vault before unlocking.",
-      });
-      return;
-    }
-
-    setVaultState({
-      state: "processing",
-      message: "Unlocking encrypted vault…",
-    });
-
-    try {
-      const accounts = await unlockEncryptedVault(vaultUpload, vaultPassword);
-      setVaultUpload(null);
-      setVaultPassword("");
-      setVaultState({
-        state: "ready",
-        message: "Vault ready to unlock.",
-        fileName: vaultUpload.name,
-        size: vaultUpload.size,
-        checksum: vaultUpload.checksum,
-        summary: {
-          accounts: accounts.length,
-          lastUpdated: new Date().toISOString(),
-        },
-        accounts,
-      });
-    } catch (error) {
-      setVaultState({
-        state: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Unable to unlock vault file.",
-      });
-    }
-  }, [unlockEncryptedVault, vaultPassword, vaultUpload]);
-
-  const hydrateQubicSession = useCallback((session: SessionTypes.Struct) => {
-    const namespace = session.namespaces?.qubic;
-    const primaryAccount = parseQubicAccountString(namespace?.accounts?.[0]);
-    if (!namespace || !primaryAccount) return;
-
-    const expiryMs =
-      typeof session.expiry === "number" ? session.expiry * 1000 : undefined;
-
-    setQubicSession((prev) => ({
-      topic: session.topic,
-      address: primaryAccount.address,
-      chainId: primaryAccount.chainId,
-      expiry: expiryMs,
-      walletName: session.peer.metadata?.name,
-      walletUrl: session.peer.metadata?.url,
-      accounts: prev?.accounts,
-      transport: "walletconnect",
-    }));
-    setQubicStatus("connected");
-    setQubicMessage(
-      `Linked ${shorten(primaryAccount.address)} · ${formatExpiryRelative(expiryMs)}`,
-    );
-  }, []);
-
-  const fetchAccountsSnapshot = useCallback(
-    async (client: SignClient, session: SessionTypes.Struct) => {
-      try {
-        const response = (await client.request({
-          topic: session.topic,
-          chainId: "qubic:mainnet",
-          request: {
-            method: "qubic_requestAccounts",
-            params: [],
-          },
-        })) as QubicAccount[];
-
-        if (Array.isArray(response) && response.length > 0) {
-          setQubicSession((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  accounts: response,
-                }
-              : prev,
-          );
-          setQubicMessage(
-            `Primary ${shorten(response[0].address)} · ${response.length} account${
-              response.length > 1 ? "s" : ""
-            }`,
-          );
-        }
-      } catch (error) {
-        console.warn("Failed to query Qubic accounts", error);
-      }
+    warning: {
+      bg: "bg-amber-50",
+      border: "border-amber-100",
+      text: "text-amber-800",
     },
-    [],
-  );
-
-  useEffect(() => {
-    if (!walletConnectProjectId) {
-      setQubicStatus("error");
-      setQubicMessage(
-        "Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID to enable Qubic wallet pairing.",
-      );
-      return;
-    }
-
-    let isMounted = true;
-    let detach: (() => void) | undefined;
-
-    (async () => {
-      try {
-        const client = await getQubicSignClient(walletConnectProjectId);
-        if (!isMounted) return;
-        signClientRef.current = client;
-        setQubicReady(true);
-
-        const existingSessions = client.session.getAll();
-        const activeQubicSession = [...existingSessions]
-          .reverse()
-          .find((session) => Boolean(session.namespaces?.qubic));
-
-        if (activeQubicSession) {
-          hydrateQubicSession(activeQubicSession);
-          await fetchAccountsSnapshot(client, activeQubicSession);
-        }
-
-        const handleSessionDelete = ({
-          topic,
-        }: SignClientTypes.EventArguments["session_delete"]) => {
-          if (
-            qubicSessionRef.current?.topic === topic &&
-            qubicSessionRef.current.transport === "walletconnect"
-          ) {
-            setQubicSession(null);
-            setQubicStatus("idle");
-            setQubicMessage("Session closed by Qubic Wallet.");
-          }
-        };
-
-        const handleSessionEvent = ({
-          params,
-        }: SignClientTypes.EventArguments["session_event"]) => {
-          if (params.chainId !== "qubic:mainnet") return;
-          const { name, data } = params.event;
-          if (
-            name === "accountsChanged" ||
-            name === "amountChanged" ||
-            name === "assetAmountChanged"
-          ) {
-            if (Array.isArray(data)) {
-              setQubicSession((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      accounts: data as QubicAccount[],
-                    }
-                  : prev,
-              );
-            }
-            setQubicMessage(`Wallet reported ${name.replace("Changed", " update")}.`);
-          }
-        };
-
-        const handleSessionUpdate = ({
-          topic,
-        }: SignClientTypes.EventArguments["session_update"]) => {
-          const session = client.session.get(topic);
-          if (session) {
-            hydrateQubicSession(session);
-          }
-        };
-
-        client.on("session_delete", handleSessionDelete);
-        client.on("session_event", handleSessionEvent);
-        client.on("session_update", handleSessionUpdate);
-
-        detach = () => {
-          client.off("session_delete", handleSessionDelete);
-          client.off("session_event", handleSessionEvent);
-          client.off("session_update", handleSessionUpdate);
-        };
-      } catch (error) {
-        if (!isMounted) return;
-        setQubicStatus("error");
-        setQubicMessage(
-          error instanceof Error
-            ? error.message
-            : "Unable to initialize Qubic Wallet client.",
-        );
-      }
-    })();
-
-    return () => {
-      isMounted = false;
-      detach?.();
-    };
-  }, [
-    fetchAccountsSnapshot,
-    hydrateQubicSession,
-    walletConnectProjectId,
-    usingFallbackProjectId,
-  ]);
-
-  const seedConnectionState: ConnectionState =
-    seedState.state === "ready"
-      ? "connected"
-      : seedState.state === "processing"
-        ? "connecting"
-        : seedState.state === "invalid"
-          ? "error"
-          : "idle";
-
-  const vaultConnectionState: ConnectionState =
-    vaultState.state === "ready"
-      ? "connected"
-      : vaultState.state === "processing"
-        ? "connecting"
-        : vaultState.state === "error"
-          ? "error"
-          : "idle";
-
-  const statusDescriptors = useMemo(
-    () => [
-      buildStatusDescriptor("Qubic Wallet", qubicStatus, qubicMessage),
-      buildStatusDescriptor("MetaMask", metaStatus, metaMessage),
-      buildStatusDescriptor("Seed Import", seedConnectionState, seedState.message),
-      buildStatusDescriptor("Vault File", vaultConnectionState, vaultState.message),
-    ],
-    [
-      metaMessage,
-      metaStatus,
-      qubicMessage,
-      qubicStatus,
-      seedConnectionState,
-      seedState,
-      vaultConnectionState,
-      vaultState,
-    ],
-  );
-
-  const connectQubic = useCallback(async () => {
-    const nativeProvider = typeof window !== "undefined" ? window.qubic : undefined;
-
-    if (nativeProvider) {
-      setQubicStatus("connecting");
-      setQubicMessage("Requesting approval from installed Qubic Wallet…");
-      try {
-        const response = await nativeProvider.request({
-          method: "qubic_requestAccounts",
-        });
-
-        const accountCandidate = Array.isArray(response)
-          ? (response[0] as NativeQubicAccount | string | undefined)
-          : (response as NativeQubicAccount | string | undefined);
-
-        const structuredAccount =
-          typeof accountCandidate === "object" && accountCandidate
-            ? accountCandidate
-            : undefined;
-
-        const address =
-          typeof accountCandidate === "string"
-            ? accountCandidate
-            : structuredAccount?.address;
-
-        if (!address) {
-          throw new Error("Unable to read account from native Qubic Wallet.");
-        }
-
-        setQubicSession({
-          topic: "qubic-native-wallet",
-          transport: "native",
-          address,
-          chainId: "qubic:mainnet",
-          walletName: "Qubic Wallet",
-          walletUrl: QUBIC_WALLET_URL,
-          accounts: structuredAccount
-            ? [
-                {
-                  address,
-                  name: structuredAccount.name ?? "Primary",
-                  amount:
-                    typeof structuredAccount.amount === "number"
-                      ? structuredAccount.amount
-                      : undefined,
-                },
-              ]
-            : undefined,
-        });
-        setQubicStatus("connected");
-        setQubicMessage(`Linked ${shorten(address)} via native provider.`);
-        return;
-      } catch (error) {
-        setQubicStatus("error");
-        setQubicMessage(
-          error instanceof Error
-            ? error.message
-            : "Native Qubic Wallet rejected the connection.",
-        );
-        return;
-      }
-    }
-
-    if (!walletConnectProjectId) {
-      setQubicStatus("error");
-      setQubicMessage(
-        "WalletConnect project ID missing. Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID.",
-      );
-      return;
-    }
-
-    setQubicStatus("connecting");
-    setQubicMessage("Generating WalletConnect URI…");
-
-    try {
-      const client =
-        signClientRef.current ?? (await getQubicSignClient(walletConnectProjectId));
-      signClientRef.current = client;
-
-      if (qubicSessionRef.current?.topic && qubicSessionRef.current.transport === "walletconnect") {
-        await client.disconnect({
-          topic: qubicSessionRef.current.topic,
-          reason: getSdkError("USER_DISCONNECTED"),
-        });
-      }
-
-      const { uri, approval } = await client.connect({
-        optionalNamespaces: QUBIC_OPTIONAL_NAMESPACES,
-      });
-
-      if (uri) {
-        setWalletConnectUri(uri);
-        setQubicMessage("Scan the QR code in Qubic Wallet to approve.");
-      }
-
-      const session = await approval();
-      setWalletConnectUri(null);
-      hydrateQubicSession(session);
-      await fetchAccountsSnapshot(client, session);
-    } catch (error) {
-      setWalletConnectUri(null);
-      setQubicStatus("error");
-      const message =
-        error instanceof Error ? error.message : "WalletConnect pairing failed.";
-      if (
-        message.toLowerCase().includes("origin not allowed") ||
-        message.includes("code: 3000")
-      ) {
-        const guidance = usingFallbackProjectId
-          ? "The demo WalletConnect project ID doesn't allow this domain. Create your own project at https://cloud.walletconnect.com, whitelist this domain, and set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID."
-          : "WalletConnect rejected this origin. Add this domain to your project at https://cloud.walletconnect.com and verify NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is set correctly.";
-        setQubicMessage(guidance);
-      } else {
-        setQubicMessage(message);
-      }
-    }
-  }, [
-    fetchAccountsSnapshot,
-    hydrateQubicSession,
-    walletConnectProjectId,
-    usingFallbackProjectId,
-  ]);
-
-  const disconnectQubic = useCallback(async () => {
-    const session = qubicSessionRef.current;
-    if (!session) return;
-
-    if (session.transport === "walletconnect" && walletConnectProjectId) {
-      try {
-        const client =
-          signClientRef.current ?? (await getQubicSignClient(walletConnectProjectId));
-        await client.disconnect({
-          topic: session.topic,
-          reason: getSdkError("USER_DISCONNECTED"),
-        });
-      } catch (error) {
-        console.warn("Failed to disconnect Qubic session", error);
-      }
-    }
-
-    setQubicSession(null);
-    setQubicStatus("idle");
-    setQubicMessage("Disconnected from Qubic Wallet.");
-  }, [walletConnectProjectId]);
-
-  const cancelPairing = useCallback(() => {
-    setWalletConnectUri(null);
-    setQubicStatus(qubicSessionRef.current ? "connected" : "idle");
-    setQubicMessage("Pairing request cancelled.");
-  }, []);
-
-  const walletConnectDeepLink = useMemo(
-    () => (walletConnectUri ? buildQubicDeepLink(walletConnectUri) : undefined),
-    [walletConnectUri],
-  );
-
-  const walletConnectWarning = useMemo(() => {
-    if (hasNativeQubic) {
-      return undefined;
-    }
-    if (!walletConnectProjectId) {
-      return "Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID to request WalletConnect sessions.";
-    }
-    if (usingFallbackProjectId) {
-      return "Using demo WalletConnect project ID. For production, create your own at https://cloud.walletconnect.com, whitelist this domain, and set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID. QR codes will generate, but connections may fail if domain isn't whitelisted.";
-    }
-    if (!qubicReady) {
-      return "Preparing WalletConnect core…";
-    }
-    return undefined;
-  }, [hasNativeQubic, walletConnectProjectId, usingFallbackProjectId, qubicReady]);
-
-  const qubicButtonLabel = qubicSession
-    ? qubicSession.transport === "native"
-      ? "Refresh native session"
-      : "Refresh WalletConnect session"
-    : hasNativeQubic
-      ? "Connect installed Qubic Wallet"
-      : "Pair Qubic Wallet via WalletConnect";
-
-  const sessionExpiryRelative = useMemo(
-    () => formatExpiryRelative(qubicSession?.expiry),
-    [qubicSession?.expiry],
-  );
-
-  const sessionExpiryAbsolute = useMemo(
-    () => formatAbsoluteDate(qubicSession?.expiry),
-    [qubicSession?.expiry],
-  );
-
-  const visibleAccounts = useMemo(
-    () => qubicSession?.accounts?.slice(0, 3) ?? [],
-    [qubicSession?.accounts],
-  );
-
-  const additionalAccounts =
-    (qubicSession?.accounts?.length ?? 0) - visibleAccounts.length;
-
-  const metamaskWarning = useMemo(
-    () =>
-      metamaskAvailable
-        ? undefined
-        : "MetaMask Flask with Snaps support is required. Install MetaMask Flask and enable Snaps beta to continue.",
-    [metamaskAvailable],
-  );
-
-  const connectMetaMask = useCallback(async () => {
-    setMetaStatus("connecting");
-    setMetaMessage("Requesting Qubic Snap access…");
-
-    const provider = typeof window !== "undefined" ? window.ethereum : undefined;
-    if (!provider?.request) {
-      setMetaStatus("error");
-      setMetaMessage("MetaMask Flask with Snaps support is required.");
-      return;
-    }
-
-    try {
-      const installSnap = async (snapId: string) => {
-        await provider.request({
-          method: "wallet_requestSnaps",
-          params: {
-            [snapId]: { version: QUBIC_SNAP_VERSION },
-          },
-        });
-        return snapId;
-      };
-
-      const ensureSnapInstalled = async (): Promise<string> => {
-        try {
-          return await installSnap(QUBIC_SNAP_ID);
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error ?? "");
-          const snapUnavailable =
-            message.includes("was not found in the NPM registry") ||
-            message.includes("Failed to fetch snap");
-
-          if (snapUnavailable && QUBIC_SNAP_ID !== DEFAULT_QUBIC_SNAP_ID) {
-            console.warn(
-              "[Qubic] Custom snap id failed; falling back to the official Qubic Snap.",
-              error,
-            );
-            setMetaMessage(
-              "Custom snap id unavailable; installing the official Qubic Snap instead…",
-            );
-            return installSnap(DEFAULT_QUBIC_SNAP_ID);
-          }
-
-          throw error;
-        }
-      };
-
-      const targetSnapId = await ensureSnapInstalled();
-
-      const snaps = (await provider.request({
-        method: "wallet_getSnaps",
-      })) as Record<string, { id: string }>;
-
-      const installedSnap =
-        Object.values(snaps ?? {}).find((snap) => snap.id === targetSnapId) ??
-        Object.values(snaps ?? {}).find(
-          (snap) =>
-            snap.id?.startsWith("local:") &&
-            snap.id.endsWith(targetSnapId.replace("npm:", "")),
-        );
-
-      const resolvedSnapId = installedSnap?.id ?? targetSnapId;
-
-      let accounts: QubicAccount[] | undefined;
-      try {
-        accounts = (await provider.request({
-          method: "wallet_invokeSnap",
-          params: {
-            snapId: resolvedSnapId,
-            request: {
-              method: "qubic_requestAccounts",
-              params: {},
-            },
-          },
-        })) as QubicAccount[];
-      } catch (error) {
-        const code = (error as { code?: number }).code;
-        if (code !== -32601 && code !== -32603) {
-          throw error;
-        }
-      }
-
-      if (!accounts || !accounts.length) {
-        const publicId = (await provider.request({
-          method: "wallet_invokeSnap",
-          params: {
-            snapId: resolvedSnapId,
-            request: {
-              method: "getPublicId",
-              params: { accountIdx: 0, confirm: false },
-            },
-          },
-        })) as string;
-
-        if (typeof publicId === "string" && publicId.length) {
-          accounts = [
-            {
-              address: publicId,
-              name: "Qubic Snap",
-              amount: undefined,
-            },
-          ];
-        }
-      }
-
-      if (!accounts || !accounts.length) {
-        throw new Error("Qubic Snap is installed but returned no accounts.");
-      }
-
-      setSnapAccounts(accounts);
-      setMetaStatus("connected");
-      setMetaMessage(
-        accounts.length > 1
-          ? `Loaded ${accounts.length} accounts via Qubic Snap.`
-          : `Linked ${shorten(accounts[0].address)} via Qubic Snap.`,
-      );
-    } catch (error) {
-      setSnapAccounts([]);
-      setMetaStatus("error");
-      setMetaMessage(
-        error instanceof Error
-          ? error.message
-          : "MetaMask Snap request failed.",
-      );
-    }
-  }, []);
-
-  const handleSeedSubmit = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      const normalized = seedInput.trim();
-
-      if (!normalized) {
-        setSeedState({ state: "invalid", message: "Seed cannot be empty." });
-        return;
-      }
-
-      const qubicSeedCandidate = normalized.toLowerCase();
-
-      if (isQubicSeed(qubicSeedCandidate) || isHexPrivateKey(normalized)) {
-        setSeedState({
-          state: "processing",
-          message: "Deriving Qubic identity…",
-        });
-
-        try {
-          const normalizedKey = normalizePrivateKeyInput(normalized);
-          const details = isQubicSeed(qubicSeedCandidate)
-            ? await deriveIdentityFromSeed(qubicSeedCandidate)
-            : await deriveIdentityFromPrivateKey(normalizedKey);
-          const snapshot = await fetchIdentitySnapshot(details.publicId);
-          setSeedState({
-            state: "ready",
-            message: "Qubic identity derived successfully.",
-            fingerprint: details.publicId.slice(-24),
-            descriptor: isQubicSeed(qubicSeedCandidate)
-              ? "Qubic deterministic seed"
-              : "Raw Schnorr private key",
-            identity: buildSeedIdentityDetails(details, snapshot),
-          });
-        } catch (error) {
-          setSeedState({
-            state: "invalid",
-            message:
-              error instanceof Error
-                ? error.message
-                : "Unable to derive identity from the provided material.",
-          });
-        }
-        return;
-      }
-
-      const classification = classifySeed(normalized);
-
-      if (!classification.valid) {
-        setSeedState({
-          state: "invalid",
-          message: "Enter 12-24 words or a 64-character private key.",
-        });
-        return;
-      }
-
-      setSeedState({
-        state: "processing",
-        message: "Deriving fingerprint…",
-      });
-
-      try {
-        const fingerprint = await digestHex(normalized);
-        setSeedState({
-          state: "ready",
-          message: "Seed imported securely.",
-          fingerprint: fingerprint.slice(0, 24),
-          descriptor: classification.descriptor,
-        });
-      } catch (error) {
-        setSeedState({
-          state: "invalid",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Secure hashing failed. Try a different browser.",
-        });
-      }
+    danger: {
+      bg: "bg-rose-50",
+      border: "border-rose-100",
+      text: "text-rose-800",
     },
-    [seedInput],
-  );
-
-  const handleFileSelection = useCallback(
-    async (file: File) => {
-      setVaultState({
-        state: "processing",
-        message: `Preparing ${file.name}…`,
-      });
-
-      try {
-        const buffer = await file.arrayBuffer();
-        const checksum = await digestHex(buffer);
-        const text = await extractVaultText(buffer);
-        const normalizedBuffer = textToArrayBuffer(text);
-        const stagedFile = new File([normalizedBuffer], file.name, {
-          type: file.type || "application/json",
-        });
-
-        setVaultUpload({
-          file: stagedFile,
-          buffer: normalizedBuffer,
-          name: file.name,
-          size: file.size,
-          checksum: checksum.slice(0, 32),
-        });
-        setVaultPassword("");
-
-        if (isEncryptedVaultText(text)) {
-          setVaultState({
-            state: "idle",
-            message: "Encrypted vault detected. Enter password to unlock.",
-          });
-          return;
-        }
-
-        const accounts = await parsePlainVaultFile(text);
-        const summary =
-          parseVaultSummary(text) ?? {
-            accounts: accounts.length,
-            lastUpdated: undefined,
-          };
-
-        setVaultUpload(null);
-        setVaultState({
-          state: "ready",
-          message: "Vault ready to unlock.",
-          fileName: file.name,
-          size: file.size,
-          checksum: checksum.slice(0, 32),
-          summary,
-          accounts,
-        });
-      } catch (error) {
-        setVaultUpload(null);
-        setVaultState({
-          state: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Unable to read vault file.",
-        });
-      }
+    success: {
+      bg: "bg-emerald-50",
+      border: "border-emerald-100",
+      text: "text-emerald-800",
     },
-    [],
-  );
-
-  const handleFileInputChange = useCallback(
-    async (event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (file) {
-        await handleFileSelection(file);
-      }
-      event.target.value = "";
-    },
-    [handleFileSelection],
-  );
-
-  const handleDrop = useCallback(
-    async (event: DragEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const file = event.dataTransfer.files?.[0];
-      if (file) {
-        await handleFileSelection(file);
-      }
-    },
-    [handleFileSelection],
-  );
-
-  const resetVault = () => {
-    setVaultState({ state: "idle" });
-    setVaultUpload(null);
-    setVaultPassword("");
   };
 
+  const toneStyles = palette[tone];
   return (
-    <div className="space-y-10">
-      <header className="rounded-3xl border border-white/10 bg-linear-to-br from-slate-900 via-slate-900/90 to-black p-8 text-white shadow-2xl shadow-black/50">
-        <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
-          <div className="space-y-4">
-            <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.3em] text-slate-300">
-              <ArrowRightLeft className="h-4 w-4 text-cyan-300" />
-              MULTI-SOURCE ONBOARDING
-            </p>
-            <h1 className="text-4xl font-semibold leading-tight text-white sm:text-5xl">
-              Qubic Wallet Connect
-            </h1>
-            <p className="max-w-2xl text-base text-slate-300">
-              Orchestrate onboarding for Qubic accounts, MetaMask users, private
-              seeds, and legacy vault exports inside a single, auditable flow.
-              Every action runs locally inside the browser for maximum privacy.
-            </p>
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-sm text-slate-200">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
-              Session Integrity
-            </p>
-            <p className="mt-2 text-2xl font-semibold text-white">
-              Real-time telemetry
-            </p>
-            <p className="mt-3 text-sm text-slate-300">
-              Tokens, signatures, and seed data never leave this device.
-            </p>
-          </div>
-        </div>
-        <div className="mt-8 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {statusDescriptors.map((status) => (
-            <StatusBadge
-              key={status.label}
-              label={status.label}
-              state={status.state}
-              description={status.description}
-            />
-          ))}
-        </div>
-      </header>
+    <div
+      className={`rounded-2xl border px-4 py-3 text-sm ${toneStyles.bg} ${toneStyles.border} ${toneStyles.text}`}
+    >
+      {children}
+    </div>
+  );
+};
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card
-          title="Qubic Wallet"
-          icon={<ShieldCheck className="h-5 w-5" />}
-          description="Link the native Qubic desktop or browser extension to bootstrap session keys."
-          status={qubicStatus}
-          statusMessage={qubicMessage}
-        >
-          <div className="flex flex-col gap-3">
-            <ActionButton onClick={connectQubic} disabled={qubicStatus === "connecting"}>
-              {qubicStatus === "connecting" ? null : <Wallet2 className="h-4 w-4" />}
-              {qubicButtonLabel}
-            </ActionButton>
-            {walletConnectWarning ? (
-              <p className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-100">
-                {walletConnectWarning}
-              </p>
-            ) : (
-              <p className="text-xs text-slate-400">
-                Tip: Keep the Qubic Wallet unlocked before pairing. Existing sessions
-                auto-load from WalletConnect storage.
-              </p>
-            )}
-            {!qubicSession && !hasNativeQubic ? (
-              <a
-                href={QUBIC_WALLET_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex w-full items-center justify-center rounded-2xl border border-cyan-400/50 px-4 py-2 text-xs font-semibold text-cyan-200 transition hover:border-cyan-200"
-              >
-                Don’t have Qubic Wallet? Create one
-              </a>
-            ) : null}
-          </div>
+const DashboardHero = ({
+  statusDescriptors,
+}: {
+  statusDescriptors: StatusDescriptor[];
+}) => (
+  <header className="rounded-3xl border border-slate-200 bg-white px-8 py-10 shadow-sm shadow-slate-200/70">
+    <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+      <div className="space-y-4">
+        <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.4em] text-slate-500">
+          <ArrowRightLeft className="h-4 w-4 text-slate-700" />
+          MULTI-SOURCE ONBOARDING
+        </p>
+        <div>
+          <h1 className="text-4xl font-semibold text-slate-900">
+            Qubic Wallet Connect
+          </h1>
+          <p className="mt-3 max-w-2xl text-base text-slate-600">
+            Coordinate native Qubic sessions, MetaMask Snaps, direct seed imports,
+            and legacy vault unlocks from a single control surface. Every step runs
+            locally for auditability.
+          </p>
+        </div>
+      </div>
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-6 py-5 text-sm text-slate-600">
+        <p className="text-[11px] uppercase tracking-[0.4em] text-slate-500">
+          Session Integrity
+        </p>
+        <p className="mt-2 text-2xl font-semibold text-slate-900">
+          Local-first security
+        </p>
+        <p className="mt-2 text-sm leading-relaxed">
+          Vaults, seeds, and signatures never leave the browser. Verify artifacts
+          before exporting them anywhere else.
+        </p>
+      </div>
+    </div>
+    <div className="mt-8 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      {statusDescriptors.map((descriptor) => (
+        <StatusBadge key={descriptor.label} descriptor={descriptor} />
+      ))}
+    </div>
+  </header>
+);
 
-          {walletConnectUri ? (
-            <div className="mt-5 rounded-2xl border border-cyan-400/40 bg-slate-900/40 p-4 text-sm text-slate-200">
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-200">
-                WalletConnect URI
-              </p>
-              <p className="mt-2 text-slate-300">
-                Scan the QR code using the Qubic Wallet mobile app or open the deep
-                link below.
-              </p>
-              <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
-                <div className="self-center rounded-2xl bg-white p-4">
-                  <QRCodeSVG
-                    value={walletConnectUri}
-                    size={164}
-                    bgColor="#ffffff"
-                    fgColor="#020617"
-                  />
-                </div>
-                <div className="flex flex-1 flex-col gap-3 text-xs text-slate-300">
-                  <div className="rounded-xl bg-slate-900/70 p-3 font-mono text-[11px] text-slate-200">
-                    <div className="max-h-24 overflow-y-auto break-all">{walletConnectUri}</div>
-                  </div>
-                  {walletConnectDeepLink ? (
-                    <a
-                      href={walletConnectDeepLink}
-                      className="rounded-2xl border border-cyan-300/40 px-4 py-2 text-center text-xs font-semibold text-cyan-200 transition hover:border-cyan-200"
-                    >
-                      Open in Qubic Wallet
-                    </a>
-                  ) : null}
-                  <SecondaryButton onClick={cancelPairing}>
-                    Cancel pairing
-                  </SecondaryButton>
-                </div>
-              </div>
+const DashboardFooter = () => (
+  <footer className="rounded-3xl border border-slate-200 bg-white px-6 py-6 text-sm text-slate-600 shadow-sm shadow-slate-200/70">
+    <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div>
+        <p className="text-base font-semibold text-slate-900">
+          Operational safeguards
+        </p>
+        <p className="text-sm text-slate-600">
+          Keep this page open when you need to validate accounts. Refresh to discard
+          any derived data or session state.
+        </p>
+      </div>
+      <SecondaryButton onClick={() => window.location.reload()}>
+        Refresh workspace
+      </SecondaryButton>
+    </div>
+  </footer>
+);
+
+const QubicWalletCard = ({ qubic }: { qubic: DashboardSnapshot["qubic"] }) => {
+  const {
+    status,
+    message,
+    connect,
+    disconnect,
+    cancelPairing,
+    buttonLabel,
+    warning,
+    walletConnectUri,
+    walletConnectDeepLink,
+    session,
+    visibleAccounts,
+    additionalAccounts,
+    sessionExpiryRelative,
+    sessionExpiryAbsolute,
+    hasNative,
+    isConnecting,
+  } = qubic;
+
+  return (
+    <Card
+      title="Qubic Wallet"
+      description="Link the native desktop wallet or pair via WalletConnect to hydrate Qubic accounts."
+      icon={<ShieldCheck className="h-5 w-5" />}
+      status={status}
+      message={message}
+    >
+      <div className="space-y-4">
+        <ActionButton onClick={connect} loading={isConnecting}>
+          <Wallet2 className="h-4 w-4" />
+          {buttonLabel}
+        </ActionButton>
+        {warning ? (
+          <Callout tone="warning">{warning}</Callout>
+        ) : (
+          <p className="text-xs text-slate-500">
+            Tip: keep the wallet unlocked before requesting a new pairing to reuse
+            cached approvals.
+          </p>
+        )}
+        {!session && !hasNative ? (
+          <a
+            href={QUBIC_WALLET_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:text-slate-900"
+          >
+            Download Qubic Wallet
+          </a>
+        ) : null}
+      </div>
+
+      {walletConnectUri ? (
+        <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-600">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-500">
+            WalletConnect pairing
+          </p>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+            <div className="self-center rounded-2xl border border-slate-200 bg-white p-4">
+              <QRCodeSVG value={walletConnectUri} size={148} />
             </div>
-          ) : null}
-
-          {qubicSession ? (
-            <div className="mt-5 space-y-4 rounded-2xl border border-white/10 bg-slate-900/40 p-4 text-sm text-slate-200">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
-                    Primary account
-                  </p>
-                  <p className="font-mono text-white">
-                    {shorten(qubicSession.address, 6)}
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    {qubicSession.walletName ?? "Qubic Wallet"} ·{" "}
-                    {qubicSession.chainId ?? "mainnet"}
-                  </p>
-                </div>
-                <SecondaryButton onClick={disconnectQubic}>
-                  Disconnect
-                </SecondaryButton>
-              </div>
-              <div className="grid gap-3 text-xs text-slate-300 sm:grid-cols-2">
-                <div>
-                  <p className="text-slate-400">Session expiry</p>
-                  <p className="text-white">{sessionExpiryRelative}</p>
-                  <p className="text-[11px] text-slate-500">{sessionExpiryAbsolute}</p>
-                </div>
-                <div>
-                  <p className="text-slate-400">Wallet app</p>
-                  {qubicSession.walletUrl ? (
-                    <a
-                      href={qubicSession.walletUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-cyan-200 underline decoration-dotted underline-offset-4"
-                    >
-                      {qubicSession.walletName ?? qubicSession.walletUrl}
-                    </a>
-                  ) : (
-                    <p className="text-white">
-                      {qubicSession.walletName ?? "Qubic Wallet"}
-                    </p>
-                  )}
+            <div className="flex flex-1 flex-col gap-2 text-xs">
+              <div className="rounded-xl border border-slate-200 bg-white p-3 font-mono text-[11px] text-slate-600">
+                <div className="max-h-24 overflow-y-auto break-all">
+                  {walletConnectUri}
                 </div>
               </div>
-              {visibleAccounts.length > 0 ? (
-                <div className="rounded-xl bg-slate-900/60 p-3 text-xs text-slate-200">
-                  <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">
-                    Accounts snapshot
-                  </p>
-                  <div className="mt-2 space-y-2">
-                    {visibleAccounts.map((account) => (
-                      <div
-                        key={account.address}
-                        className="flex items-center justify-between font-mono text-[11px]"
-                      >
-                        <span>{shorten(account.address, 4)}</span>
-                        {typeof account.amount === "number" ? (
-                          <span className="text-slate-400">{account.amount} QU</span>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                  {additionalAccounts > 0 ? (
-                    <p className="mt-2 text-[11px] text-slate-500">
-                      +{additionalAccounts} more account
-                      {additionalAccounts > 1 ? "s" : ""}
-                    </p>
-                  ) : null}
-                </div>
+              {walletConnectDeepLink ? (
+                <a
+                  href={walletConnectDeepLink}
+                  className="rounded-xl border border-slate-300 px-3 py-2 text-center text-xs font-semibold text-slate-700 transition hover:text-slate-900"
+                >
+                  Open in Qubic Wallet
+                </a>
               ) : null}
-            </div>
-          ) : null}
-        </Card>
-
-        <Card
-          title="MetaMask (Qubic Snap)"
-          icon={<Wallet2 className="h-5 w-5" />}
-          description="Install the official Qubic Wallet Snap inside MetaMask Flask to bridge browser wallets with the Qubic network."
-          status={metaStatus}
-          statusMessage={metaMessage}
-        >
-          <div className="flex flex-col gap-3">
-            <ActionButton
-              onClick={connectMetaMask}
-              disabled={metaStatus === "connecting" || !metamaskAvailable}
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              {metaStatus === "connected" ? "Refresh Snap session" : "Connect MetaMask"}
-            </ActionButton>
-            {!metamaskAvailable ? (
-              <SecondaryButton onClick={openMetamaskDownload}>
-                Install MetaMask Flask
+              <SecondaryButton onClick={cancelPairing}>
+                Cancel pairing
               </SecondaryButton>
-            ) : null}
-            {metamaskWarning ? (
-              <p className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-100">
-                {metamaskWarning}
-              </p>
-            ) : (
-              <p className="text-xs text-slate-400">
-                Use MetaMask Flask → Settings → Snaps to review or revoke permissions.
-              </p>
-            )}
+            </div>
           </div>
-          {snapAccounts.length ? (
-            <div className="mt-5 space-y-3 rounded-2xl border border-white/10 bg-slate-900/40 p-4 text-xs text-slate-200">
+        </div>
+      ) : null}
+
+      {session ? (
+        <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 text-sm text-slate-600">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
               <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">
-                Linked accounts
+                Primary account
               </p>
-              <div className="space-y-2">
-                {snapAccounts.slice(0, 3).map((account) => (
+              <p className="font-mono text-[13px] text-slate-900">
+                {shorten(session.address, 6)}
+              </p>
+              <p className="text-xs text-slate-500">
+                {session.walletName ?? "Qubic Wallet"} · {session.chainId ?? "mainnet"}
+              </p>
+            </div>
+            <SecondaryButton onClick={disconnect}>Disconnect</SecondaryButton>
+          </div>
+          <div className="grid gap-4 text-xs text-slate-600 sm:grid-cols-2">
+            <div>
+              <p className="text-slate-500">Session expiry</p>
+              <p className="text-slate-900">{sessionExpiryRelative}</p>
+              <p className="text-[11px] text-slate-500">{sessionExpiryAbsolute}</p>
+            </div>
+            <div>
+              <p className="text-slate-500">Wallet app</p>
+              {session.walletUrl ? (
+                <a
+                  href={session.walletUrl}
+                  className="text-slate-900 underline decoration-dotted underline-offset-4"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {session.walletName ?? session.walletUrl}
+                </a>
+              ) : (
+                <p className="text-slate-900">
+                  {session.walletName ?? "Qubic Wallet"}
+                </p>
+              )}
+            </div>
+          </div>
+          {visibleAccounts.length ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">
+                Accounts snapshot
+              </p>
+              <div className="mt-2 space-y-2 font-mono text-[11px] text-slate-700">
+                {visibleAccounts.map((account) => (
                   <div
                     key={account.address}
-                    className="flex items-center justify-between rounded-xl bg-slate-900/60 p-3 font-mono text-[11px]"
+                    className="flex items-center justify-between"
                   >
-                    <div>
-                      <p className="text-white">{shorten(account.address, 6)}</p>
-                      {account.name ? (
-                        <p className="text-[10px] text-slate-400">{account.name}</p>
-                      ) : null}
-                    </div>
+                    <span>{shorten(account.address, 4)}</span>
                     {typeof account.amount === "number" ? (
-                      <p className="text-slate-400">{account.amount} QU</p>
-                    ) : (
-                      <p className="text-slate-500">—</p>
-                    )}
+                      <span>{account.amount} QU</span>
+                    ) : null}
+                  </div>
+                ))}
+                {additionalAccounts > 0 ? (
+                  <p className="text-slate-500">
+                    +{additionalAccounts} more account
+                    {additionalAccounts > 1 ? "s" : ""}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </Card>
+  );
+};
+
+const MetaMaskCard = ({
+  metamask,
+}: {
+  metamask: DashboardSnapshot["metamask"];
+}) => {
+  const {
+    status,
+    message,
+    connect,
+    available,
+    warning,
+    snapAccounts,
+    openDownload,
+  } = metamask;
+  const isConnecting = status === "connecting";
+
+  return (
+    <Card
+      title="MetaMask (Qubic Snap)"
+      description="Request Qubic Snap permissions from MetaMask Flask to expose managed accounts."
+      icon={<Wallet2 className="h-5 w-5" />}
+      status={status}
+      message={message}
+    >
+      <div className="space-y-3">
+        <ActionButton onClick={connect} loading={isConnecting} disabled={!available}>
+          <CheckCircle2 className="h-4 w-4" />
+          {status === "connected" ? "Refresh Qubic Snap" : "Connect MetaMask"}
+        </ActionButton>
+        {!available ? (
+          <SecondaryButton onClick={openDownload}>
+            Install MetaMask Flask
+          </SecondaryButton>
+        ) : null}
+        {warning ? (
+          <Callout tone="warning">{warning}</Callout>
+        ) : (
+          <p className="text-xs text-slate-500">
+            Manage Snaps from MetaMask → Settings → Snaps to review permissions.
+          </p>
+        )}
+      </div>
+      {snapAccounts.length ? (
+        <div className="mt-5 space-y-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 text-xs text-slate-600">
+          <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">
+            Linked accounts
+          </p>
+          <div className="space-y-2">
+            {snapAccounts.slice(0, 3).map((account) => (
+              <div
+                key={account.address}
+                className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 font-mono text-[11px]"
+              >
+                <div>
+                  <p className="text-slate-900">{shorten(account.address, 6)}</p>
+                  {account.name ? (
+                    <p className="text-[10px] text-slate-500">{account.name}</p>
+                  ) : null}
+                </div>
+                {typeof account.amount === "number" ? (
+                  <p className="text-slate-500">{account.amount} QU</p>
+                ) : (
+                  <p className="text-slate-400">—</p>
+                )}
+              </div>
+            ))}
+            {snapAccounts.length > 3 ? (
+              <p className="text-[11px] text-slate-500">
+                +{snapAccounts.length - 3} more hidden
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  );
+};
+
+const SeedCard = ({ seed }: { seed: DashboardSnapshot["seed"] }) => {
+  const seedState = seed.state;
+  const showSuccess = seedState.state === "ready";
+  const showError = seedState.state === "invalid";
+
+  return (
+    <Card
+      title="Private Seed"
+      description="Validate mnemonic phrases or raw private keys in a sealed browser enclave."
+      icon={<KeyRound className="h-5 w-5" />}
+      status={seed.connectionState}
+      message={seedState.message}
+    >
+      <form className="space-y-4" onSubmit={seed.handleSubmit}>
+        <InputLabel label="Seed / private key">
+          <TextArea
+            value={seed.input}
+            onChange={seed.setInput}
+            placeholder="example: obey turtle manual diesel ..."
+            masked={!seed.visible}
+          />
+        </InputLabel>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <SecondaryButton type="button" onClick={seed.toggleVisibility}>
+            {seed.visible ? "Hide words" : "Show words"}
+          </SecondaryButton>
+          <ActionButton
+            type="submit"
+            loading={seedState.state === "processing"}
+          >
+            {seedState.state === "processing" ? "Validating…" : "Validate & import"}
+          </ActionButton>
+        </div>
+        {showError ? (
+          <Callout tone="danger">{seedState.message}</Callout>
+        ) : null}
+        {showSuccess ? (
+          <div className="space-y-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-800">
+            <p className="font-semibold">{seedState.descriptor}</p>
+            <p className="font-mono text-xs text-emerald-700">
+              Fingerprint · {seedState.fingerprint}
+            </p>
+          </div>
+        ) : null}
+        {showSuccess && seedState.identity ? (
+          <div className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-xs text-slate-600 sm:grid-cols-2">
+            <div>
+              <p className="text-slate-500">Public identity</p>
+              <p className="font-mono text-[11px] text-slate-900 break-all">
+                {seedState.identity.publicId}
+              </p>
+            </div>
+            <div>
+              <p className="text-slate-500">Balance snapshot</p>
+              <p className="text-slate-900">
+                {seedState.identity.balance ?? "Unknown"}
+              </p>
+              <p className="text-[10px] text-slate-500">
+                Assets tracked · {seedState.identity.ownedAssetCount ?? 0}
+              </p>
+            </div>
+            <div className="sm:col-span-2">
+              <p className="text-slate-500">Public key (hex)</p>
+              <p className="font-mono text-[11px] text-slate-900 break-all">
+                {seedState.identity.publicKeyHex}
+              </p>
+            </div>
+          </div>
+        ) : null}
+      </form>
+    </Card>
+  );
+};
+
+const VaultCard = ({ vault }: { vault: DashboardSnapshot["vault"] }) => {
+  const {
+    connectionState,
+    state,
+    upload,
+    fileInputRef,
+    handleFileInputChange,
+    handleVaultUnlock,
+    password,
+    setPassword,
+    handleDrop,
+    reset,
+  } = vault;
+
+  const isProcessing = state.state === "processing";
+  const showReady = state.state === "ready";
+  const encryptedUpload = upload ?? null;
+
+  return (
+    <Card
+      title="Vault File"
+      description="Import `.qubic-vault` exports or JSON archives to bootstrap workspaces."
+      icon={<UploadCloud className="h-5 w-5" />}
+      status={connectionState}
+      message={state.message}
+    >
+      <input
+        id="vault-file"
+        type="file"
+        ref={fileInputRef}
+        className="sr-only"
+        accept=".qubic-vault,.json,.zip"
+        onChange={handleFileInputChange}
+      />
+      {showReady ? (
+        <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold text-slate-900">{state.fileName}</p>
+              <p className="text-xs text-slate-500">{formatBytes(state.size)}</p>
+            </div>
+            <button
+              type="button"
+              onClick={reset}
+              className="text-xs font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-900"
+            >
+              Reset
+            </button>
+          </div>
+          <p className="font-mono text-[11px] text-slate-500">
+            SHA-256 · {state.checksum}
+          </p>
+          {state.summary ? (
+            <div className="grid grid-cols-2 gap-4 text-xs">
+              <div>
+                <p className="text-slate-500">Accounts detected</p>
+                <p className="text-lg font-semibold text-slate-900">
+                  {state.summary.accounts ?? "–"}
+                </p>
+              </div>
+              <div>
+                <p className="text-slate-500">Last updated</p>
+                <p className="text-lg font-semibold text-slate-900">
+                  {state.summary.lastUpdated ?? "Unknown"}
+                </p>
+              </div>
+            </div>
+          ) : null}
+          {state.accounts?.length ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+              <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">
+                Derived accounts
+              </p>
+              <div className="mt-2 space-y-2">
+                {state.accounts.map((account) => (
+                  <div
+                    key={`${account.publicId}-${account.name ?? "vault"}`}
+                    className="rounded-lg border border-slate-200 p-3"
+                  >
+                    <div className="flex items-center justify-between font-mono text-[11px] text-slate-900">
+                      <span>{shorten(account.publicId, 5)}</span>
+                      <span className="uppercase tracking-widest text-slate-500">
+                        {account.source}
+                      </span>
+                    </div>
+                    {account.name ? (
+                      <p className="text-[11px] text-slate-500">{account.name}</p>
+                    ) : null}
+                    <p className="text-[11px] text-slate-500">
+                      Balance: {account.balance ?? "Unknown"}
+                    </p>
                   </div>
                 ))}
               </div>
-              {snapAccounts.length > 3 ? (
-                <p className="text-[11px] text-slate-500">
-                  +{snapAccounts.length - 3} more hidden
-                </p>
-              ) : null}
             </div>
           ) : null}
-        </Card>
-
-        <Card
-          title="Private Seed"
-          icon={<KeyRound className="h-5 w-5" />}
-          description="Validate mnemonic phrases or import raw private keys in an offline-safe enclave."
-          status={seedConnectionState}
-          statusMessage={seedState.message}
-        >
-          <form className="space-y-4" onSubmit={handleSeedSubmit}>
-            <InputLabel label="Seed / private key">
-              <TextArea
-                value={seedInput}
-                onChange={setSeedInput}
-                placeholder="ex: obey turtle manual diesel ..."
-                masked={!seedVisible}
-              />
-            </InputLabel>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <SecondaryButton onClick={() => setSeedVisible(!seedVisible)}>
-                {seedVisible ? "Hide" : "Show"} words
-              </SecondaryButton>
-              <SecondaryButton type="submit">
-                {seedState.state === "processing" ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Validating…
-                  </>
-                ) : (
-                  "Validate & import"
-                )}
-              </SecondaryButton>
-            </div>
-            {seedState.state === "ready" && (
-              <div className="rounded-2xl border border-emerald-400/40 bg-emerald-400/10 p-4 text-sm text-emerald-100">
-                <p className="font-semibold text-emerald-200">
-                  {seedState.descriptor}
-                </p>
-                <p className="mt-1 font-mono text-xs text-emerald-100/90">
-                  Fingerprint · {seedState.fingerprint}
-                </p>
-              </div>
-            )}
-            {seedState.state === "ready" && seedState.identity ? (
-              <div className="grid gap-4 rounded-2xl border border-white/10 bg-slate-900/40 p-4 text-xs text-slate-200 sm:grid-cols-2">
-                <div>
-                  <p className="text-slate-400">Public identity</p>
-                  <p className="font-mono text-sm text-white">
-                    {seedState.identity.publicId}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-slate-400">Balance snapshot</p>
-                  <p className="text-white">
-                    {seedState.identity.balance ?? "Unknown"}
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    Assets tracked · {seedState.identity.ownedAssetCount ?? 0}
-                  </p>
-                </div>
-                <div className="sm:col-span-2">
-                  <p className="text-slate-400">Public key (hex)</p>
-                  <p className="font-mono text-[11px] text-white break-all">
-                    {seedState.identity.publicKeyHex}
-                  </p>
-                </div>
-              </div>
-            ) : null}
-          </form>
-        </Card>
-
-        <Card
-          title="Vault File"
-          icon={<UploadCloud className="h-5 w-5" />}
-          description="Drop encrypted Qubic `.qubic-vault` exports to hydrate the workspace."
-          status={vaultConnectionState}
-          statusMessage={vaultState.message}
-        >
-          <input
-            id="vault-file"
-            type="file"
-            ref={fileInputRef}
-            className="sr-only"
-            accept=".qubic-vault"
-            onChange={handleFileInputChange}
-          />
-          {vaultState.state === "ready" ? (
-            <div className="space-y-4 rounded-2xl border border-white/10 bg-slate-900/40 p-4 text-sm">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-semibold text-white">
-                    {vaultState.fileName}
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    {formatBytes(vaultState.size)}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={resetVault}
-                  className="text-xs font-semibold uppercase tracking-wide text-cyan-300"
-                >
-                  Reset
-                </button>
-              </div>
-              <p className="font-mono text-[11px] text-slate-300">
-                SHA-256 · {vaultState.checksum}
+        </div>
+      ) : encryptedUpload ? (
+        <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold text-slate-900">{encryptedUpload.name}</p>
+              <p className="text-xs text-slate-500">
+                {formatBytes(encryptedUpload.size)}
               </p>
-              {vaultState.summary && (
-                <div className="grid grid-cols-2 gap-4 text-xs">
-                  <div>
-                    <p className="text-slate-400">Accounts detected</p>
-                    <p className="text-lg font-semibold text-white">
-                      {vaultState.summary.accounts ?? "–"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-slate-400">Last updated</p>
-                    <p className="text-lg font-semibold text-white">
-                      {vaultState.summary.lastUpdated ?? "Unknown"}
-                    </p>
-                  </div>
-                </div>
-              )}
-              {vaultState.accounts?.length ? (
-                <div className="rounded-xl bg-slate-900/60 p-3 text-xs text-slate-200">
-                  <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">
-                    Derived accounts
-                  </p>
-                  <div className="mt-2 space-y-2">
-                    {vaultState.accounts.map((account) => (
-                      <div
-                        key={`${account.publicId}-${account.name ?? "vault"}`}
-                        className="rounded-lg border border-white/5 p-3"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono text-[11px] text-white">
-                            {shorten(account.publicId, 5)}
-                          </span>
-                          <span className="text-[10px] uppercase tracking-widest text-slate-500">
-                            {account.source}
-                          </span>
-                        </div>
-                        {account.name ? (
-                          <p className="text-[11px] text-slate-400">{account.name}</p>
-                        ) : null}
-                        <p className="text-[11px] text-slate-400">
-                          Balance: {account.balance ?? "Unknown"}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : vaultUpload ? (
-            <div className="space-y-4 rounded-2xl border border-white/10 bg-slate-900/40 p-4 text-sm">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-semibold text-white">{vaultUpload.name}</p>
-                  <p className="text-xs text-slate-400">
-                    {formatBytes(vaultUpload.size)}
-                  </p>
-                  <p className="font-mono text-[11px] text-slate-300">
-                    SHA-256 · {vaultUpload.checksum}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={resetVault}
-                  className="text-xs font-semibold uppercase tracking-wide text-cyan-300"
-                >
-                  Remove
-                </button>
-              </div>
-              <p className="text-xs text-slate-400">
-                Encrypted vault detected. Provide the password you used when exporting the file.
+              <p className="font-mono text-[11px] text-slate-500">
+                SHA-256 · {encryptedUpload.checksum}
               </p>
-              <InputLabel label="Vault password">
-                <input
-                  type="password"
-                  value={vaultPassword}
-                  onChange={(event) => setVaultPassword(event.target.value)}
-                  className="rounded-2xl border border-white/10 bg-slate-900/60 p-3 text-sm text-white outline-none transition focus:border-cyan-400/60"
-                  placeholder="Password"
-                />
-              </InputLabel>
-              <ActionButton
-                onClick={handleVaultUnlock}
-                disabled={!vaultPassword || vaultState.state === "processing"}
-              >
-                {vaultState.state === "processing" ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Unlocking…
-                  </>
-                ) : (
-                  "Unlock vault"
-                )}
-              </ActionButton>
             </div>
-          ) : (
-            <FileDropZone
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
+            <button
+              type="button"
+              onClick={reset}
+              className="text-xs font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-900"
             >
-              <UploadCloud className="h-6 w-6 text-cyan-200" />
-              <div>
-                <p className="text-sm font-semibold">
-                  Drag & drop to import vault
-                </p>
-                <p className="text-xs text-slate-400">
-                  .qubic-vault JSON or ZIP files stay on this device.
-                </p>
-              </div>
-            </FileDropZone>
-          )}
-        </Card>
-      </div>
-
-      <footer className="rounded-3xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-300">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              Remove
+            </button>
+          </div>
+          <p className="text-xs text-slate-500">
+            Encrypted vault detected. Enter the password that was used when exporting
+            the file.
+          </p>
+          <InputLabel label="Vault password">
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white p-3 text-sm text-slate-700 outline-none transition focus:border-slate-400"
+              placeholder="Password"
+            />
+          </InputLabel>
+          <ActionButton
+            onClick={handleVaultUnlock}
+            loading={isProcessing}
+            disabled={!password}
+          >
+            Unlock vault
+          </ActionButton>
+        </div>
+      ) : (
+        <FileDropZone
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <UploadCloud className="h-6 w-6 text-slate-500" />
           <div>
-            <p className="text-white">Operational safeguards</p>
-            <p className="text-slate-400">
-              We never transmit seeds, vault files, or signatures to remote
-              infrastructure. Verify the hash before exporting anything off-box.
+            <p className="text-sm font-semibold text-slate-900">
+              Drag & drop to import vault
+            </p>
+            <p className="text-xs text-slate-500">
+              .qubic-vault JSON or ZIP files stay on this device.
             </p>
           </div>
-          <SecondaryButton onClick={() => window.location.reload()}>
-            Refresh session
-          </SecondaryButton>
-        </div>
-      </footer>
+        </FileDropZone>
+      )}
+    </Card>
+  );
+};
+
+export default function WalletDashboard() {
+  const dashboard = useWalletDashboard();
+  const { statusDescriptors, qubic, metamask, seed, vault } = dashboard;
+
+  return (
+    <div className="space-y-8">
+      <DashboardHero statusDescriptors={statusDescriptors} />
+      <div className="grid gap-6 lg:grid-cols-2">
+        <QubicWalletCard qubic={qubic} />
+        <MetaMaskCard metamask={metamask} />
+        <SeedCard seed={seed} />
+        <VaultCard vault={vault} />
+      </div>
+      <DashboardFooter />
     </div>
   );
 }

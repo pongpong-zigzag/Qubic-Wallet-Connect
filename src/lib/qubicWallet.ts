@@ -30,13 +30,9 @@ export const QUBIC_REQUIRED_NAMESPACES: ProposalTypes.RequiredNamespaces =
   QUBIC_OPTIONAL_NAMESPACES as ProposalTypes.RequiredNamespaces;
 
 const getMetadata = (): SignClientTypes.Metadata => ({
-  name: "Qubic Wallet Connect",
-  description:
-    "Unified dashboard for Qubic Wallet, MetaMask Snap, seed, and vault onboarding.",
-  url:
-    typeof window !== "undefined"
-      ? window.location.origin
-      : "https://wallet.qubic.org",
+  name: "QubicWC",
+  description: "wallet connect for qubic",
+  url: window.location.origin,
   icons: [
     "https://wallet.qubic.org/assets/qubic-icon.png",
     "https://wallet.qubic.org/assets/qubic-gradient.png",
@@ -45,7 +41,7 @@ const getMetadata = (): SignClientTypes.Metadata => ({
 
 const FALLBACK_PROJECT_ID =
   process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID?.trim() ||
-  "c817fdbc74c97c9862e06acf315497a9";
+  "197942ee5616373eb5a46007404eeffe";
 
 const clientCache = new Map<string, Promise<SignClient>>();
 
